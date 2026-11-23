@@ -14,12 +14,18 @@ ESP32-DevKitC 用のファームウェアを GitHub 上で管理・自動ビル�
 ```
 .
 ├── platformio.ini
+├── pins.json                      # GPIO 配線の定義（唯一の情報源）
 ├── src/
 │   ├── main.cpp
+│   ├── pinout.h / .cpp            # pins.json から生成した配線表の表示
 │   └── command_handler.h / .cpp   # シリアルコマンド解析（単体テスト可能に分離）
-├── test/                          # PlatformIO native テスト（コマンド解析・フォーマット等）
+├── test/                          # PlatformIO native テスト（コマンド解析・フォーマット・配線表示）
+├── tests/python/                  # pins.json 検証・flash-manifest 生成の unittest
 ├── scripts/
-│   └── build_release_bins.py      # bootloader/partitions/boot_app0/firmware を 0x0000 結合し manifest 生成
+│   ├── build_release_bins.py      # bootloader/partitions/boot_app0/firmware を 0x0000 結合し manifest 生成
+│   ├── pins_manifest.py           # pins.json の読み込み・検証・ヘッダ生成
+│   ├── pio_pinout_header.py       # ビルド時に pinout_generated.h を生成する pre-script
+│   └── pio_fw_version.py          # FW_VERSION 埋め込み
 ├── docs/ci/
 │   └── release-firmware.yml       # .github/workflows/release-firmware.yml 用の CI/Release 定義
 ├── .github/workflows/
@@ -36,6 +42,7 @@ ESP32-DevKitC 用のファームウェアを GitHub 上で管理・自動ビル�
    - `help`: コマンド一覧を表示
    - `ping`: `pong` を返す
    - `info`: チップ情報・ファームバージョン・空きヒープ・稼働時間を表示
+   - `pinout`: `pins.json` の配線一覧（`GPIO 番号 方向 active=レベル ラベル` ＋ 注意行）を表示
    - `led on`: LED 常時点灯
    - `led off`: LED 消灯
    - `led blink`: LED 点滅（1秒周期）に戻す
@@ -59,7 +66,7 @@ ESP32-DevKitC 用のファームウェアを GitHub 上で管理・自動ビル�
        "schemaVersion": 1,
        "chip": "esp32",
        "board": "esp32dev",
-       "version": "0.1.0",
+       "version": "0.1.1",
        "flashMode": "dio",
        "flashFreq": "40m",
        "flashSize": "4MB",
@@ -70,18 +77,48 @@ ESP32-DevKitC 用のファームウェアを GitHub 上で管理・自動ビル�
        },
        "parts": [
          { "filename": "esp32-devkitc-firmware-app.bin", "offset": "0x10000", "sha256": "..." }
-       ]
+       ],
+       "pins": [
+         {
+           "gpio": 2,
+           "label": "オンボード青色LED / 外部LED出力",
+           "direction": "output",
+           "activeLevel": "HIGH",
+           "note": "GPIO2 は内蔵LEDと共通。外部LEDを繋ぐ場合は 220〜330Ω 抵抗経由で GND へ接続"
+         }
+       ],
+       "wiringNotes": [
+         "3.3Vロジック専用（5V入力禁止）。5V を使う場合は VIN へ接続",
+         "GPIO6〜11 は内蔵フラッシュ専用のため外部に接続しない"
+       ],
+       "powerNote": "3.3Vロジック専用（5V入力禁止）。5V を使う場合は VIN へ接続"
      }
      ```
+   - `pins` / `wiringNotes` / `powerNote` は `pins.json` がある場合のみ付与する（無い場合はキー自体を出さない＝従来のスキーマと同一）。
 
-## 6. CI / Release 自動化要件
+## 6. ピン配線情報（`pins.json`）
+書き込みアプリが「どの GPIO に何を繋ぐか」を自動表示できるよう、リポジトリ直下の `pins.json` を唯一の情報源とする。
+
+1. **スキーマ（`schemaVersion: 1`）**
+   - `board`: PlatformIO ボード ID（任意。`--board` と一致しない場合はエラー）
+   - `pins[]`: 必須。`gpio`（整数 `0`〜`39`、`6`〜`11` はフラッシュ専用のため不可、重複不可）、`label`（非空文字列）、`direction`（`output` / `input` / `input_pullup` / `input_pulldown` / `input_output`）、`activeLevel`（`HIGH` / `LOW` / `NONE`、任意）、`note`（任意、非空文字列）
+   - `powerNote`: 電源注意（任意、1 行）
+   - `notes[]`: ボード共通の注意点（任意、各要素は非空文字列）
+   - 未知のキーは誤字検出のためエラー。文字列は前後空白を除いて 512 文字まで。
+2. **ビルドへの反映**
+   - `scripts/pio_pinout_header.py`（`pins.json` を `pinout_generated.h` に変換する pre-script）を `esp32dev` / `native` 両環境に適用。`pinout.cpp` は生成ヘッダを参照するので、ファームウェアの `pinout` 出力と `flash-manifest.json` の `pins` は常に一致する。
+   - `PINS_JSON` 環境変数で別ファイルを指定可能。`pins.json` が無い場合もビルドは成功し、空テーブルとして扱う。
+3. **検証**
+   - `scripts/build_release_bins.py` は読み込み時に（`--pins` またはリポジトリの `pins.json`）検証し、生成後の `flash-manifest.json` も `--verify-only` で再検証する。
+   - `tests/python/` の unittest がスキーマ検証・マニフェスト埋め込み・後方互換を確認する。
+
+## 7. CI / Release 自動化要件
 - **PR / push 検証**:
   - `pio test -e native`（ホスト環境でのユニットテスト）
   - `pio run -e esp32dev`（ESP32-DevKitC 向けビルド検証）
-  - `scripts/build_release_bins.py` による結合 `.bin` と `flash-manifest.json` 生成・検証
-- **Release 自動作成**:
+  - `scripts/build_release_bins.py` による結合 `.bin` と `flash-manifest.json` 生成・検証- **Release 自動作成**:
   - タグ `v*`（例: `v0.1.0`）が push されたとき、または `workflow_dispatch` でリリースバージョンを指定したときに、上記アセット 3 点を添付して GitHub Release を公開する。
 - 注意: GitHub App 権限等で `.github/workflows/` の push が制限される場合は `docs/ci/` に配置し、作成後に `.github/workflows/` へ反映する。
 
-## 7. 初回リリース目標
-- `v0.1.0` として、上記 3 点のアセットを添付した GitHub Release を公開すること。
+## 8. 初回リリース目標
+- `v0.1.1` として、`flash-manifest.json` に `pins` / `wiringNotes` を含む 3 点のアセットを添付した GitHub Release を公開すること。
