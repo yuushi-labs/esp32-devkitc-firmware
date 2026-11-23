@@ -22,6 +22,7 @@ void test_parses_simple_verbs() {
   assertCommand(CommandType::kHelp, "help");
   assertCommand(CommandType::kPing, "ping");
   assertCommand(CommandType::kInfo, "info");
+  assertCommand(CommandType::kPinout, "pinout");
 }
 
 void test_parsing_is_case_insensitive_and_trims_whitespace() {
@@ -29,6 +30,8 @@ void test_parsing_is_case_insensitive_and_trims_whitespace() {
   assertCommand(CommandType::kPing, "  PiNg  ");
   assertCommand(CommandType::kPing, "\tping\r");
   assertCommand(CommandType::kInfo, "Info\n");
+  assertCommand(CommandType::kPinout, "PINOUT");
+  assertCommand(CommandType::kPinout, "  PinOut \r\n");
 }
 
 void test_empty_input_is_ignored() {
@@ -74,6 +77,7 @@ void test_extra_arguments_are_rejected() {
   assertCommand(CommandType::kUnknown, "help me");
   assertCommand(CommandType::kUnknown, "ping now");
   assertCommand(CommandType::kUnknown, "info all");
+  assertCommand(CommandType::kUnknown, "pinout all");
 }
 
 void test_unknown_commands() {
@@ -87,6 +91,7 @@ void test_help_text_lists_every_command() {
   TEST_ASSERT_NOT_NULL(std::strstr(help, "help"));
   TEST_ASSERT_NOT_NULL(std::strstr(help, "ping"));
   TEST_ASSERT_NOT_NULL(std::strstr(help, "info"));
+  TEST_ASSERT_NOT_NULL(std::strstr(help, "pinout"));
   TEST_ASSERT_NOT_NULL(std::strstr(help, "led on"));
   TEST_ASSERT_NOT_NULL(std::strstr(help, "led off"));
   TEST_ASSERT_NOT_NULL(std::strstr(help, "led blink"));
