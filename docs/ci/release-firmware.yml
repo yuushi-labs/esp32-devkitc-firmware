@@ -170,13 +170,43 @@ jobs:
             echo "error: flash-manifest.json has no build.gitCommit" >&2
             exit 1
           fi
-          tag_commit=$(gh api "repos/$GITHUB_REPOSITORY/commits/$TAG" --jq .sha 2>/dev/null || true)
+
+          # Query the tag namespace explicitly: a branch with the same name must
+          # not be mistaken for the release tag, and only a real 404 means the
+          # tag has not been created yet.
+          api="https://api.github.com/repos/$GITHUB_REPOSITORY"
+          status=$(curl -sS -o /tmp/tag-ref.json -w '%{http_code}' \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "$api/git/ref/tags/$TAG")
+
+          tag_commit=""
+          case "$status" in
+            200)
+              tag_sha=$(python -c 'import json; print(json.load(open("/tmp/tag-ref.json"))["object"]["sha"])')
+              tag_type=$(python -c 'import json; print(json.load(open("/tmp/tag-ref.json"))["object"]["type"])')
+              if [ "$tag_type" = "tag" ]; then
+                tag_commit=$(curl -sS -H "Authorization: Bearer $GH_TOKEN" "$api/git/tags/$tag_sha" \
+                  | python -c 'import json, sys; print(json.load(sys.stdin)["object"]["sha"])')
+              else
+                tag_commit="$tag_sha"
+              fi
+              ;;
+            404)
+              echo "tag $TAG does not exist yet"
+              ;;
+            *)
+              echo "error: cannot resolve tag $TAG (HTTP $status)" >&2
+              exit 1
+              ;;
+          esac
+
           if [ -n "$tag_commit" ] && [ "$tag_commit" != "$manifest_commit" ]; then
             echo "error: tag $TAG points at $tag_commit but the assets were built from $manifest_commit" >&2
             exit 1
           fi
           echo "manifest commit: $manifest_commit"
-          echo "tag commit: ${tag_commit:-<tag not created yet>}"
+          echo "tag commit: ${tag_commit:-<not created yet>}"
 
       - name: Create the tag for a manual publish
         if: github.event_name == 'workflow_dispatch'
