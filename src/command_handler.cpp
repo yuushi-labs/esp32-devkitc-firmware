@@ -134,6 +134,8 @@ Command parseCommand(const char* line) {
     command.type = CommandType::kPing;
   } else if (equalsIgnoreCase(verbText, "info") && arg == nullptr) {
     command.type = CommandType::kInfo;
+  } else if (equalsIgnoreCase(verbText, "pinout") && arg == nullptr) {
+    command.type = CommandType::kPinout;
   } else if (equalsIgnoreCase(verbText, "led") && arg != nullptr && extra == nullptr) {
     command.hasLedMode = true;
     if (equalsIgnoreCase(arg, "on")) {
@@ -161,6 +163,7 @@ const char* commandHelpText() {
          "  help       show this help\n"
          "  ping       reply with pong\n"
          "  info       show chip and firmware information\n"
+         "  pinout     show the GPIO wiring for this firmware\n"
          "  led on     turn the onboard LED on\n"
          "  led off    turn the onboard LED off\n"
          "  led blink  blink the onboard LED (1 s period)\n";

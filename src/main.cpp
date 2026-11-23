@@ -4,13 +4,14 @@
 //   - boot banner with version, chip model, chip id and reset reason
 //   - onboard LED on GPIO2 blinking at a 1 s period
 //   - 5 s heartbeat log with uptime, free heap and LED mode
-//   - serial commands: help, ping, info, led on/off/blink
+//   - serial commands: help, ping, info, pinout, led on/off/blink
 
 #include <Arduino.h>
 #include <esp_system.h>
 
 #include "app_config.h"
 #include "command_handler.h"
+#include "pinout.h"
 
 namespace {
 
@@ -100,6 +101,18 @@ void printHeartbeat() {
   Serial.print(buffer);
 }
 
+void printPinout() {
+  // pins.json notes are free text, so allow a generous buffer and report when
+  // the destination was too small instead of silently cutting the list.
+  static char buffer[1024];
+  const fw::PinoutTable table = fw::embeddedPinout();
+  const size_t needed = fw::formatPinout(table, buffer, sizeof(buffer));
+  Serial.print(buffer);
+  if (needed >= sizeof(buffer)) {
+    Serial.println("[pinout truncated]");
+  }
+}
+
 void handleLine(const char* line, bool overflowed) {
   if (overflowed) {
     Serial.printf("error: command too long (max %u characters)\n",
@@ -120,6 +133,9 @@ void handleLine(const char* line, bool overflowed) {
       return;
     case fw::CommandType::kInfo:
       printInfo();
+      return;
+    case fw::CommandType::kPinout:
+      printPinout();
       return;
     case fw::CommandType::kLedOn:
     case fw::CommandType::kLedOff:

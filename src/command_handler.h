@@ -18,6 +18,7 @@ enum class CommandType {
   kHelp,
   kPing,
   kInfo,
+  kPinout,
   kLedOn,
   kLedOff,
   kLedBlink,
