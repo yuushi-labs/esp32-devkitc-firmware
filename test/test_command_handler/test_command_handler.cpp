@@ -158,6 +158,31 @@ void test_line_buffer_accepts_an_empty_line() {
       static_cast<int>(fw::parseCommand(buffer.line()).type));
 }
 
+void test_long_input_does_not_overflow_the_normaliser() {
+  // 126 characters then " b" used to write past the internal buffer.
+  char line[160];
+  std::memset(line, 'a', 126);
+  line[126] = ' ';
+  line[127] = 'b';
+  line[128] = '\0';
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(CommandType::kUnknown),
+                        static_cast<int>(fw::parseCommand(line).type));
+
+  std::memset(line, 'x', 159);
+  line[159] = '\0';
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(CommandType::kUnknown),
+                        static_cast<int>(fw::parseCommand(line).type));
+}
+
+void test_long_token_with_known_prefix_is_unknown() {
+  char line[80];
+  std::memcpy(line, "led ", 4);
+  std::memset(line + 4, 'z', 70);
+  line[74] = '\0';
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(CommandType::kUnknown),
+                        static_cast<int>(fw::parseCommand(line).type));
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -177,5 +202,7 @@ int main(int argc, char** argv) {
   RUN_TEST(test_line_buffer_flags_overflow_and_truncates);
   RUN_TEST(test_line_buffer_clear_resets_state);
   RUN_TEST(test_line_buffer_accepts_an_empty_line);
+  RUN_TEST(test_long_input_does_not_overflow_the_normaliser);
+  RUN_TEST(test_long_token_with_known_prefix_is_unknown);
   return UNITY_END();
 }

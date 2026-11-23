@@ -136,7 +136,9 @@ void handleLine(const char* line, bool overflowed) {
 }
 
 void pollSerial() {
-  while (Serial.available() > 0) {
+  // Bounded per loop() call so LED/heartbeat timers keep running even when a
+  // burst of commands arrives; the pending line stays buffered.
+  for (int budget = 64; budget > 0 && Serial.available() > 0; --budget) {
     const char c = static_cast<char>(Serial.read());
     if (g_lineBuffer.feed(c)) {
       handleLine(g_lineBuffer.line(), g_lineBuffer.overflowed());
@@ -149,7 +151,7 @@ void serviceLed(uint32_t nowMs) {
   if (g_ledMode != fw::LedMode::kBlink) {
     return;
   }
-  if (nowMs - g_lastBlinkMs >= fw::kBlinkIntervalMs) {
+  if (nowMs - g_lastBlinkMs >= fw::kBlinkToggleIntervalMs) {
     g_lastBlinkMs = nowMs;
     writeLed(!g_ledState);
   }

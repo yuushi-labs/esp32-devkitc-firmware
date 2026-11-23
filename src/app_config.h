@@ -19,7 +19,8 @@ constexpr uint32_t kSerialBaud = 115200;
 constexpr uint8_t kLedPin = 2;
 
 constexpr uint32_t kHeartbeatIntervalMs = 5000;
-constexpr uint32_t kBlinkIntervalMs = 1000;
+// Toggle every 500 ms so the blink period is 1 s.
+constexpr uint32_t kBlinkToggleIntervalMs = 500;
 
 // Longest accepted serial command, excluding the terminator.
 constexpr size_t kMaxLineLength = 64;

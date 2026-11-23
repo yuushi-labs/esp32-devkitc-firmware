@@ -1,6 +1,7 @@
 #include <unity.h>
 
 #include <cstring>
+#include <string>
 
 #include "app_config.h"
 #include "command_handler.h"
@@ -91,6 +92,19 @@ void test_zero_sized_buffer_reports_length_without_writing() {
                            static_cast<uint32_t>(needed));
 }
 
+void test_long_version_reports_the_untruncated_length() {
+  std::string longVersion(500, 'v');
+  fw::DeviceStatus status = makeStatus();
+  status.version = longVersion.c_str();
+
+  char out[1024];
+  const size_t needed = fw::formatInfo(status, out, sizeof(out));
+  TEST_ASSERT_EQUAL_UINT32(static_cast<uint32_t>(std::strlen(out)),
+                           static_cast<uint32_t>(needed));
+  TEST_ASSERT_TRUE(needed > 500);
+  TEST_ASSERT_NOT_NULL(std::strstr(out, longVersion.c_str()));
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -104,5 +118,6 @@ int main(int argc, char** argv) {
   RUN_TEST(test_banner_reports_version_and_help_hint);
   RUN_TEST(test_truncated_output_is_nul_terminated_and_reports_needed_length);
   RUN_TEST(test_zero_sized_buffer_reports_length_without_writing);
+  RUN_TEST(test_long_version_reports_the_untruncated_length);
   return UNITY_END();
 }

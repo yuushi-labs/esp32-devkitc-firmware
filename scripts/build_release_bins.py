@@ -150,12 +150,19 @@ def build_release(
     flash_freq: str,
     flash_size: str,
     extra_source_dirs: tuple[Path, ...],
+    boot_app0_path: Path | None = None,
 ) -> dict:
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    if boot_app0_path is not None and not boot_app0_path.is_file():
+        raise SystemExit(f"error: --boot-app0 not found: {boot_app0_path}")
+
     loaded: list[tuple[str, str, int, Path, bytes]] = []
     for name, filename, offset in SEGMENTS:
-        path = resolve_source(build_dir, filename, extra_source_dirs)
+        if name == "boot_app0" and boot_app0_path is not None:
+            path = boot_app0_path
+        else:
+            path = resolve_source(build_dir, filename, extra_source_dirs)
         loaded.append((name, filename, offset, path, path.read_bytes()))
 
     merged = merge_segments([(offset, data) for _, _, offset, _, data in loaded])
@@ -243,8 +250,30 @@ def verify_release(output_dir: Path) -> dict:
         return path
 
     merged_path = check_file(manifest["merged"], "merged")
+    if int(manifest["merged"]["offset"], 16) != MERGED_OFFSET:
+        problems.append(
+            f"merged: offset {manifest['merged']['offset']} is not "
+            f"{hex_offset(MERGED_OFFSET)}"
+        )
+
     for index, part in enumerate(manifest["parts"]):
         check_file(part, f"parts[{index}]")
+        if int(part["offset"], 16) != APP_OFFSET:
+            problems.append(
+                f"parts[{index}]: offset {part['offset']} is not "
+                f"{hex_offset(APP_OFFSET)}"
+            )
+
+    expected_offsets = {name: offset for name, _, offset in SEGMENTS}
+    for segment in manifest["segments"]:
+        expected = expected_offsets.get(segment["name"])
+        if expected is None:
+            problems.append(f"segment {segment['name']}: unknown segment")
+        elif int(segment["offset"], 16) != expected:
+            problems.append(
+                f"segment {segment['name']}: offset {segment['offset']} is not "
+                f"{hex_offset(expected)}"
+            )
 
     if merged_path is not None:
         merged = merged_path.read_bytes()
@@ -326,9 +355,6 @@ def main(argv: list[str] | None = None) -> int:
     if args.verify_only:
         manifest = verify_release(args.output_dir)
     else:
-        extra_dirs = default_boot_app0_dirs()
-        if args.boot_app0 is not None:
-            extra_dirs = (args.boot_app0.parent,) + extra_dirs
         manifest = build_release(
             build_dir=args.build_dir,
             output_dir=args.output_dir,
@@ -338,7 +364,8 @@ def main(argv: list[str] | None = None) -> int:
             flash_mode=args.flash_mode,
             flash_freq=args.flash_freq,
             flash_size=args.flash_size,
-            extra_source_dirs=extra_dirs,
+            extra_source_dirs=default_boot_app0_dirs(),
+            boot_app0_path=args.boot_app0,
         )
         manifest = verify_release(args.output_dir)
         print_summary(manifest, args.output_dir)

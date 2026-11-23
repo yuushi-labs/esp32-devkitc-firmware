@@ -1,5 +1,6 @@
 #include "command_handler.h"
 
+#include <cstdarg>
 #include <cstdio>
 #include <cstring>
 
@@ -7,21 +8,6 @@
 
 namespace fw {
 namespace {
-
-constexpr size_t kScratchSize = 384;
-
-// Copies src into out, always NUL terminating, and returns the untruncated
-// length so callers can spot a short buffer.
-size_t copyOut(const char* src, char* out, size_t outSize) {
-  const size_t len = std::strlen(src);
-  if (outSize == 0) {
-    return len;
-  }
-  const size_t n = len < outSize - 1 ? len : outSize - 1;
-  std::memcpy(out, src, n);
-  out[n] = '\0';
-  return len;
-}
 
 bool isSpace(char c) {
   return c == ' ' || c == '\t' || c == '\r' || c == '\n';
@@ -110,7 +96,9 @@ Command parseCommand(const char* line) {
       pendingSpace = out > 0;
       continue;
     }
-    if (out + 1 >= sizeof(normalised)) {
+    // Reserve room for a pending separator, the character itself and the NUL.
+    const size_t required = pendingSpace ? 2 : 1;
+    if (out + required >= sizeof(normalised)) {
       break;
     }
     if (pendingSpace) {
@@ -178,48 +166,60 @@ const char* commandHelpText() {
          "  led blink  blink the onboard LED (1 s period)\n";
 }
 
+namespace {
+
+// snprintf with a real destination even for a zero-sized request, and a
+// return value that always reports the untruncated length.
+int formatInto(char* out, size_t outSize, const char* format, ...) {
+  char scratch;
+  va_list args;
+  va_start(args, format);
+  const int needed =
+      std::vsnprintf(outSize > 0 ? out : &scratch, outSize, format, args);
+  va_end(args);
+  return needed;
+}
+
+}  // namespace
+
 size_t formatBanner(const DeviceStatus& status, char* out, size_t outSize) {
-  char scratch[kScratchSize];
-  std::snprintf(scratch, sizeof(scratch),
-                "esp32-devkitc-firmware v%s (%s)\n"
-                "chip_model=%s chip_revision=%u chip_id=0x%012llx\n"
-                "reset_reason=%s\n"
-                "type 'help' for commands\n",
-                status.version, FW_BOARD, status.chipModel,
-                static_cast<unsigned>(status.chipRevision),
-                static_cast<unsigned long long>(status.chipId),
-                status.resetReason);
-  return copyOut(scratch, out, outSize);
+  const int needed = formatInto(
+      out, outSize,
+      "esp32-devkitc-firmware v%s (%s)\n"
+      "chip_model=%s chip_revision=%u chip_id=0x%012llx\n"
+      "reset_reason=%s\n"
+      "type 'help' for commands\n",
+      status.version, FW_BOARD, status.chipModel,
+      static_cast<unsigned>(status.chipRevision),
+      static_cast<unsigned long long>(status.chipId), status.resetReason);
+  return needed > 0 ? static_cast<size_t>(needed) : 0;
 }
 
 size_t formatInfo(const DeviceStatus& status, char* out, size_t outSize) {
-  char scratch[kScratchSize];
-  std::snprintf(scratch, sizeof(scratch),
-                "fw_version=%s\n"
-                "board=%s\n"
-                "chip_model=%s chip_revision=%u\n"
-                "chip_id=0x%012llx\n"
-                "reset_reason=%s\n"
-                "uptime_ms=%lu\n"
-                "free_heap=%lu\n"
-                "led_mode=%s\n",
-                status.version, FW_BOARD, status.chipModel,
-                static_cast<unsigned>(status.chipRevision),
-                static_cast<unsigned long long>(status.chipId),
-                status.resetReason, static_cast<unsigned long>(status.uptimeMs),
-                static_cast<unsigned long>(status.freeHeap),
-                ledModeName(status.ledMode));
-  return copyOut(scratch, out, outSize);
+  const int needed = formatInto(
+      out, outSize,
+      "fw_version=%s\n"
+      "board=%s\n"
+      "chip_model=%s chip_revision=%u\n"
+      "chip_id=0x%012llx\n"
+      "reset_reason=%s\n"
+      "uptime_ms=%lu\n"
+      "free_heap=%lu\n"
+      "led_mode=%s\n",
+      status.version, FW_BOARD, status.chipModel,
+      static_cast<unsigned>(status.chipRevision),
+      static_cast<unsigned long long>(status.chipId), status.resetReason,
+      static_cast<unsigned long>(status.uptimeMs),
+      static_cast<unsigned long>(status.freeHeap), ledModeName(status.ledMode));
+  return needed > 0 ? static_cast<size_t>(needed) : 0;
 }
 
 size_t formatHeartbeat(const DeviceStatus& status, char* out, size_t outSize) {
-  char scratch[128];
-  std::snprintf(scratch, sizeof(scratch),
-                "heartbeat uptime_ms=%lu free_heap=%lu led_mode=%s\n",
-                static_cast<unsigned long>(status.uptimeMs),
-                static_cast<unsigned long>(status.freeHeap),
-                ledModeName(status.ledMode));
-  return copyOut(scratch, out, outSize);
+  const int needed = formatInto(
+      out, outSize, "heartbeat uptime_ms=%lu free_heap=%lu led_mode=%s\n",
+      static_cast<unsigned long>(status.uptimeMs),
+      static_cast<unsigned long>(status.freeHeap), ledModeName(status.ledMode));
+  return needed > 0 ? static_cast<size_t>(needed) : 0;
 }
 
 }  // namespace fw
