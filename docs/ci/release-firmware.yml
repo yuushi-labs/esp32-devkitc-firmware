@@ -1,0 +1,174 @@
+name: release-firmware
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version without the leading v (for example 0.1.0)"
+        required: true
+        type: string
+      publish:
+        description: "Create a GitHub Release with the built assets"
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-firmware-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PLATFORMIO_CORE_DIR: ${{ github.workspace }}/.platformio
+  FIRMWARE_ENV: esp32dev
+
+jobs:
+  version:
+    name: Resolve version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.resolve.outputs.version }}
+      tag: ${{ steps.resolve.outputs.tag }}
+    steps:
+      - name: Resolve version and tag
+        id: resolve
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          REF_NAME: ${{ github.ref_name }}
+          INPUT_VERSION: ${{ inputs.version }}
+          SHORT_SHA: ${{ github.sha }}
+        run: |
+          set -eu
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            version="${INPUT_VERSION#v}"
+          elif [ "${REF#refs/tags/v}" != "$REF" ]; then
+            version="${REF_NAME#v}"
+          else
+            version="0.0.0-dev+$(printf '%s' "$SHORT_SHA" | cut -c1-7)"
+          fi
+          if [ -z "$version" ]; then
+            echo "error: empty version" >&2
+            exit 1
+          fi
+          if [ "${REF#refs/tags/}" != "$REF" ]; then
+            tag="${REF_NAME}"
+          else
+            tag="v${version}"
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "resolved version=$version tag=$tag"
+
+  native-tests:
+    name: Native unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Cache PlatformIO
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.PLATFORMIO_CORE_DIR }}
+          key: pio-${{ runner.os }}-${{ hashFiles('platformio.ini') }}
+
+      - name: Install PlatformIO
+        run: pip install --disable-pip-version-check --upgrade platformio
+
+      - name: Run native tests
+        run: pio test -e native
+
+  firmware:
+    name: Build esp32dev firmware
+    runs-on: ubuntu-latest
+    needs: [version, native-tests]
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Cache PlatformIO
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.PLATFORMIO_CORE_DIR }}
+          key: pio-${{ runner.os }}-${{ hashFiles('platformio.ini') }}
+
+      - name: Install PlatformIO
+        run: pip install --disable-pip-version-check --upgrade platformio
+
+      - name: Build firmware
+        env:
+          FW_VERSION: ${{ needs.version.outputs.version }}
+        run: pio run -e "$FIRMWARE_ENV"
+
+      - name: Build release binaries
+        env:
+          FW_VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          set -eu
+          python scripts/build_release_bins.py \
+            --build-dir ".pio/build/$FIRMWARE_ENV" \
+            --output-dir dist \
+            --version "$FW_VERSION" \
+            --print-manifest
+
+      - name: Upload release assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: esp32-devkitc-firmware
+          path: |
+            dist/esp32-devkitc-firmware-merged.bin
+            dist/esp32-devkitc-firmware-app.bin
+            dist/flash-manifest.json
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub Release
+    runs-on: ubuntu-latest
+    needs: [version, firmware]
+    if: >-
+      startsWith(github.ref, 'refs/tags/v') ||
+      (github.event_name == 'workflow_dispatch' && inputs.publish)
+    steps:
+      - name: Download release assets
+        uses: actions/download-artifact@v4
+        with:
+          name: esp32-devkitc-firmware
+          path: dist
+
+      - name: Show assets
+        run: ls -l dist && sha256sum dist/*.bin
+
+      - name: Create or update release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.version.outputs.tag }}
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          set -eu
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            gh release upload "$TAG" dist/* --clobber --repo "$GITHUB_REPOSITORY"
+          else
+            gh release create "$TAG" dist/* \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "esp32-devkitc-firmware v$VERSION" \
+              --generate-notes \
+              --verify-tag
+          fi
