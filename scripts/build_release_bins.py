@@ -17,6 +17,11 @@ Usage:
     python scripts/build_release_bins.py --build-dir .pio/build/esp32dev \
         --output-dir dist --version 0.1.0
     python scripts/build_release_bins.py --verify-only --output-dir dist
+
+``pins.json`` (repository root, or ``--pins PATH``) is validated and embedded
+in ``flash-manifest.json`` as ``pins``/``wiringNotes`` so the Android flasher
+can show which GPIO to wire where. Without it the manifest keeps its previous
+shape.
 """
 
 from __future__ import annotations
@@ -29,6 +34,15 @@ import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from pins_manifest import (  # noqa: E402 - after the sys.path tweak
+    PinsManifestError,
+    load_pins_file,
+    manifest_pin_block,
+    validate_pin_list,
+)
 
 MERGED_FILENAME = "esp32-devkitc-firmware-merged.bin"
 APP_FILENAME = "esp32-devkitc-firmware-app.bin"
@@ -48,6 +62,10 @@ SEGMENTS = (
 APP_OFFSET = 0x10000
 
 DEFAULT_VERSION = "0.0.0-dev"
+
+# pins.json lives at the repository root; the firmware embeds the same file.
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+DEFAULT_PINS_PATH = PROJECT_ROOT / "pins.json"
 
 
 def sha256_bytes(data: bytes) -> str:
@@ -132,6 +150,23 @@ def resolve_source(
     )
 
 
+def load_pin_document(path: Path, *, board: str, explicit: bool) -> dict | None:
+    """Read pins.json when it exists.
+
+    ``explicit`` marks a path given with ``--pins``: a missing file is then an
+    error, while the default location simply means "no pin information" so
+    older checkouts keep building.
+    """
+    if not path.is_file():
+        if explicit:
+            raise SystemExit(f"error: --pins not found: {path}")
+        return None
+    try:
+        return load_pins_file(path, expected_board=board)
+    except PinsManifestError as exc:
+        raise SystemExit(f"error: {exc}") from exc
+
+
 def merge_segments(segments: list[tuple[int, bytes]]) -> bytes:
     end = max(offset + len(data) for offset, data in segments)
     merged = bytearray([FLASH_FILL_BYTE]) * end
@@ -151,6 +186,7 @@ def build_release(
     flash_size: str,
     extra_source_dirs: tuple[Path, ...],
     boot_app0_path: Path | None = None,
+    pin_document: dict | None = None,
 ) -> dict:
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -207,14 +243,20 @@ def build_release(
             }
         ],
         "segments": segments,
-        "build": {
-            "tool": "scripts/build_release_bins.py",
-            "generatedAt": datetime.now(timezone.utc)
-            .replace(microsecond=0)
-            .isoformat()
-            .replace("+00:00", "Z"),
-            "gitCommit": detect_git_commit(),
-        },
+    }
+
+    # Pin wiring (pins.json) is optional so manifests produced before it existed
+    # keep exactly the same shape.
+    if pin_document is not None:
+        manifest.update(manifest_pin_block(pin_document))
+
+    manifest["build"] = {
+        "tool": "scripts/build_release_bins.py",
+        "generatedAt": datetime.now(timezone.utc)
+        .replace(microsecond=0)
+        .isoformat()
+        .replace("+00:00", "Z"),
+        "gitCommit": detect_git_commit(),
     }
 
     manifest_path = output_dir / MANIFEST_FILENAME
@@ -293,6 +335,22 @@ def verify_release(output_dir: Path) -> dict:
                     f"the expected bytes at {segment['offset']}"
                 )
 
+    # The pin block is optional, but when it is present it must stay valid and
+    # the wiring notes must be displayable strings.
+    pins = manifest.get("pins")
+    if pins is not None:
+        try:
+            validate_pin_list(pins, source="flash-manifest.json")
+        except PinsManifestError as exc:
+            problems.append(str(exc))
+        wiring_notes = manifest.get("wiringNotes")
+        if not isinstance(wiring_notes, list) or not all(
+            isinstance(note, str) and note.strip() for note in wiring_notes
+        ):
+            problems.append(
+                "wiringNotes: expected an array of non-empty strings"
+            )
+
     if problems:
         for problem in problems:
             print(f"error: {problem}", file=sys.stderr)
@@ -321,6 +379,12 @@ def print_summary(manifest: dict, output_dir: Path) -> None:
             f"segment : {segment['name']:<10} {segment['offset']} "
             f"size={segment['size']}"
         )
+    pins = manifest.get("pins")
+    if pins:
+        gpios = ", ".join(f"GPIO{pin['gpio']}" for pin in pins)
+        print(f"pins    : {len(pins)} ({gpios})")
+    else:
+        print("pins    : none (no pins.json)")
     print(f"output  : {output_dir}")
 
 
@@ -342,6 +406,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--boot-app0", type=Path, default=None,
                         help="explicit path to boot_app0.bin when it is not in the "
                              "build directory")
+    parser.add_argument("--pins", type=Path, default=None,
+                        help="pins.json with the GPIO wiring embedded in the "
+                             "manifest (default: the repository's pins.json when "
+                             "it exists)")
     parser.add_argument("--verify-only", action="store_true",
                         help="only re-verify an existing output directory")
     parser.add_argument("--print-manifest", action="store_true",
@@ -355,6 +423,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.verify_only:
         manifest = verify_release(args.output_dir)
     else:
+        pins_path = args.pins if args.pins is not None else DEFAULT_PINS_PATH
+        pin_document = load_pin_document(
+            pins_path, board=args.board, explicit=args.pins is not None
+        )
         manifest = build_release(
             build_dir=args.build_dir,
             output_dir=args.output_dir,
@@ -366,6 +438,7 @@ def main(argv: list[str] | None = None) -> int:
             flash_size=args.flash_size,
             extra_source_dirs=default_boot_app0_dirs(),
             boot_app0_path=args.boot_app0,
+            pin_document=pin_document,
         )
         manifest = verify_release(args.output_dir)
         print_summary(manifest, args.output_dir)

@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "board": "esp32dev",
+  "pins": [
+    {
+      "gpio": 2,
+      "label": "オンボード青色LED / 外部LED出力",
+      "direction": "output",
+      "activeLevel": "HIGH",
+      "note": "GPIO2 は内蔵LEDと共通。外部LEDを繋ぐ場合は 220〜330Ω 抵抗経由で GND へ接続"
+    },
+    {
+      "gpio": 0,
+      "label": "BOOTボタン (書き込みモード)",
+      "direction": "input_pullup",
+      "activeLevel": "LOW",
+      "note": "通常は自動リセットで操作不要。書き込みに失敗するときだけ押しながら EN(RST) を押す"
+    }
+  ],
+  "powerNote": "3.3Vロジック専用（5V入力禁止）。5V を使う場合は VIN へ接続",
+  "notes": [
+    "GPIO6〜11 は内蔵フラッシュ専用のため外部に接続しない",
+    "GPIO34〜39 は入力専用（内部プルアップ/プルダウンなし）",
+    "ストラップピン (GPIO0/2/5/12/15) は起動時のレベルでブートモードが変わるため、外部回路が起動時に影響しないようにする"
+  ]
+}
