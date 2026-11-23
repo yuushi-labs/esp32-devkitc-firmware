@@ -1,0 +1,6 @@
+.pio/
+.platformio/
+dist/
+__pycache__/
+*.pyc
+.openhands/

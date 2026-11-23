@@ -1,0 +1,84 @@
+// Serial command parsing and status formatting.
+//
+// This translation unit is free of Arduino/ESP-IDF dependencies so the exact
+// same code runs in the `native` PlatformIO test environment.
+#pragma once
+
+#include <cstddef>
+#include <cstdint>
+
+namespace fw {
+
+enum class LedMode { kBlink, kOn, kOff };
+
+const char* ledModeName(LedMode mode);
+
+enum class CommandType {
+  kNone,
+  kHelp,
+  kPing,
+  kInfo,
+  kLedOn,
+  kLedOff,
+  kLedBlink,
+  kUnknown,
+};
+
+struct Command {
+  CommandType type = CommandType::kNone;
+  bool hasLedMode = false;
+  LedMode ledMode = LedMode::kBlink;
+};
+
+// Accepts '\n' terminated lines, tolerates a trailing '\r', and reports
+// over-long lines instead of dropping them silently.
+class LineBuffer {
+ public:
+  LineBuffer(char* storage, size_t capacity);
+
+  // Returns true once a complete line (without the terminator) is available.
+  bool feed(char c);
+
+  // NUL terminated line content; empty until the first line completes.
+  const char* line() const;
+
+  // True when the pending line did not fit and was truncated.
+  bool overflowed() const { return overflowed_; }
+
+  size_t length() const { return length_; }
+
+  void clear();
+
+ private:
+  char* storage_;
+  size_t capacity_;
+  size_t length_ = 0;
+  bool overflowed_ = false;
+};
+
+// Parses a single command line. Leading/trailing whitespace is ignored and
+// matching is case insensitive.
+Command parseCommand(const char* line);
+
+const char* commandHelpText();
+
+struct DeviceStatus {
+  const char* version;
+  const char* chipModel;
+  uint32_t chipRevision;
+  uint64_t chipId;
+  uint32_t uptimeMs;
+  uint32_t freeHeap;
+  LedMode ledMode;
+  const char* resetReason;
+};
+
+// The format functions below always NUL terminate and return the number of
+// characters the full text needs (snprintf semantics), so callers can detect
+// truncation.
+
+size_t formatBanner(const DeviceStatus& status, char* out, size_t outSize);
+size_t formatInfo(const DeviceStatus& status, char* out, size_t outSize);
+size_t formatHeartbeat(const DeviceStatus& status, char* out, size_t outSize);
+
+}  // namespace fw
