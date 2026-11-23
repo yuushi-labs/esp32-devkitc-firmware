@@ -171,9 +171,10 @@ jobs:
             exit 1
           fi
 
-          # Query the tag namespace explicitly: a branch with the same name must
-          # not be mistaken for the release tag, and only a real 404 means the
-          # tag has not been created yet.
+          # Resolve the tag through the tag namespace (a branch with the same
+          # name must not match) and peel annotated tags, including nested
+          # tag -> tag chains, down to the commit. Only a real 404 means the tag
+          # has not been created yet; any other failure aborts the publish.
           api="https://api.github.com/repos/$GITHUB_REPOSITORY"
           status=$(curl -sS -o /tmp/tag-ref.json -w '%{http_code}' \
             -H "Authorization: Bearer $GH_TOKEN" \
@@ -182,18 +183,26 @@ jobs:
 
           tag_commit=""
           case "$status" in
-            200)
-              tag_sha=$(python -c 'import json; print(json.load(open("/tmp/tag-ref.json"))["object"]["sha"])')
-              tag_type=$(python -c 'import json; print(json.load(open("/tmp/tag-ref.json"))["object"]["type"])')
-              if [ "$tag_type" = "tag" ]; then
-                tag_commit=$(curl -sS -H "Authorization: Bearer $GH_TOKEN" "$api/git/tags/$tag_sha" \
-                  | python -c 'import json, sys; print(json.load(sys.stdin)["object"]["sha"])')
-              else
-                tag_commit="$tag_sha"
-              fi
-              ;;
             404)
               echo "tag $TAG does not exist yet"
+              ;;
+            200)
+              sha=$(python -c 'import json; print(json.load(open("/tmp/tag-ref.json"))["object"]["sha"])')
+              kind=$(python -c 'import json; print(json.load(open("/tmp/tag-ref.json"))["object"]["type"])')
+              while [ "$kind" = "tag" ]; do
+                if ! curl -sS -f -o /tmp/tag-object.json \
+                    -H "Authorization: Bearer $GH_TOKEN" "$api/git/tags/$sha"; then
+                  echo "error: cannot peel tag object $sha of $TAG" >&2
+                  exit 1
+                fi
+                sha=$(python -c 'import json; print(json.load(open("/tmp/tag-object.json"))["object"]["sha"])')
+                kind=$(python -c 'import json; print(json.load(open("/tmp/tag-object.json"))["object"]["type"])')
+              done
+              if [ "$kind" != "commit" ]; then
+                echo "error: tag $TAG points at a $kind, not a commit" >&2
+                exit 1
+              fi
+              tag_commit="$sha"
               ;;
             *)
               echo "error: cannot resolve tag $TAG (HTTP $status)" >&2
