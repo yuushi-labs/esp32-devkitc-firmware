@@ -100,13 +100,13 @@ ESP32-DevKitC 用のファームウェアを GitHub 上で管理・自動ビル�
 書き込みアプリが「どの GPIO に何を繋ぐか」を自動表示できるよう、リポジトリ直下の `pins.json` を唯一の情報源とする。
 
 1. **スキーマ（`schemaVersion: 1`）**
-   - `board`: PlatformIO ボード ID（任意。`--board` と一致しない場合はエラー）
+   - `board`: PlatformIO ボード ID（任意。`--board` / ビルドの `BOARD` と一致しない場合はエラー）
    - `pins[]`: 必須。`gpio`（整数 `0`〜`39`、`6`〜`11` はフラッシュ専用のため不可、重複不可）、`label`（非空文字列）、`direction`（`output` / `input` / `input_pullup` / `input_pulldown` / `input_output`）、`activeLevel`（`HIGH` / `LOW` / `NONE`、任意）、`note`（任意、非空文字列）
    - `powerNote`: 電源注意（任意、1 行）
    - `notes[]`: ボード共通の注意点（任意、各要素は非空文字列）
    - 未知のキーは誤字検出のためエラー。文字列は前後空白を除いて 512 文字まで。
 2. **ビルドへの反映**
-   - `scripts/pio_pinout_header.py`（`pins.json` を `pinout_generated.h` に変換する pre-script）を `esp32dev` / `native` 両環境に適用。`pinout.cpp` は生成ヘッダを参照するので、ファームウェアの `pinout` 出力と `flash-manifest.json` の `pins` は常に一致する。
+   - `scripts/pio_pinout_header.py`（`pins.json` を `pinout_generated.h` に変換する pre-script）を `esp32dev` / `native` 両環境に適用。`pinout.cpp` は生成ヘッダを参照する。ファームウェアの `pinout` と `flash-manifest.json` の `pins` は、**ビルドとリリース生成に同じ `pins.json` を渡した場合に一致する**。
    - ボード照合: 実機環境では `BOARD`（`esp32dev`）と `pins.json` の `board` を照合し、一致しなければビルドを中止する。ボードを持たない `native` 環境では照合しない。
    - `PINS_JSON` 環境変数で別ファイルを指定可能。`pins.json` が無い場合もビルドは成功し、空テーブルとして扱う。
    - **別ファイルを使う場合は、ビルドの `PINS_JSON` とリリース生成の `--pins` に同じファイルを指定すること。** リリース生成側は `--pins` が無いとルートの `pins.json` を読むため、片方だけ差し替えるとファームウェアの `pinout` と `flash-manifest.json` の `pins` がずれる。

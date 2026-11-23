@@ -147,7 +147,7 @@ class ValidateDocumentTest(unittest.TestCase):
         with self.assertRaises(PinsManifestError):
             validate_document(document)
 
-    def test_pins_must_be_an_array(self):
+    def test_validate_pin_list_rejects_non_arrays(self):
         for value in (None, {}, "GPIO2", 2):
             with self.subTest(value=value):
                 with self.assertRaisesRegex(PinsManifestError, "array"):
