@@ -107,7 +107,9 @@ ESP32-DevKitC 用のファームウェアを GitHub 上で管理・自動ビル�
    - 未知のキーは誤字検出のためエラー。文字列は前後空白を除いて 512 文字まで。
 2. **ビルドへの反映**
    - `scripts/pio_pinout_header.py`（`pins.json` を `pinout_generated.h` に変換する pre-script）を `esp32dev` / `native` 両環境に適用。`pinout.cpp` は生成ヘッダを参照するので、ファームウェアの `pinout` 出力と `flash-manifest.json` の `pins` は常に一致する。
+   - ボード照合: 実機環境では `BOARD`（`esp32dev`）と `pins.json` の `board` を照合し、一致しなければビルドを中止する。ボードを持たない `native` 環境では照合しない。
    - `PINS_JSON` 環境変数で別ファイルを指定可能。`pins.json` が無い場合もビルドは成功し、空テーブルとして扱う。
+   - **別ファイルを使う場合は、ビルドの `PINS_JSON` とリリース生成の `--pins` に同じファイルを指定すること。** リリース生成側は `--pins` が無いとルートの `pins.json` を読むため、片方だけ差し替えるとファームウェアの `pinout` と `flash-manifest.json` の `pins` がずれる。
 3. **検証**
    - `scripts/build_release_bins.py` は読み込み時に（`--pins` またはリポジトリの `pins.json`）検証し、生成後の `flash-manifest.json` も `--verify-only` で再検証する。
    - `tests/python/` の unittest がスキーマ検証・マニフェスト埋め込み・後方互換を確認する。

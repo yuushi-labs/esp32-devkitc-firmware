@@ -147,6 +147,12 @@ class ValidateDocumentTest(unittest.TestCase):
         with self.assertRaises(PinsManifestError):
             validate_document(document)
 
+    def test_pins_must_be_an_array(self):
+        for value in (None, {}, "GPIO2", 2):
+            with self.subTest(value=value):
+                with self.assertRaisesRegex(PinsManifestError, "array"):
+                    validate_pin_list(value, source="test")
+
     def test_blank_optional_text_is_dropped(self):
         document = sample_document()
         document["powerNote"] = "   "

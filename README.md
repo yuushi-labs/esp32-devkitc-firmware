@@ -46,7 +46,7 @@ Release 公開時に以下のファイルを構築・添付します：
 | キー | 必須 | 内容 |
 | --- | --- | --- |
 | `schemaVersion` | ✔ | 現在は `1` のみ |
-| `board` | | PlatformIO ボード ID。`--board` と違うとビルドが止まります |
+| `board` | | PlatformIO ボード ID。`--board`（リリース生成）/ ビルドの `BOARD` と違うとビルドが止まります |
 | `pins` | ✔ | 1 件以上の配列（`gpio` の重複不可） |
 | `pins[].gpio` | ✔ | 整数 `0`〜`39`。`6`〜`11` はフラッシュ専用のため指定不可 |
 | `pins[].label` | ✔ | 空でない文字列（例: `"BOOTボタン (書き込みモード)"`） |
@@ -58,7 +58,7 @@ Release 公開時に以下のファイルを構築・添付します：
 
 文字列は前後の空白を除いて 512 文字までです。`pins.json` が無いリポジトリでもビルドは通り、`flash-manifest.json` に `pins` を付けず、`pinout` は「ピン情報なし」と表示します（後方互換）。
 
-別のファイルを使うときは `--pins path/to/pins.json`（生成スクリプト）または `PINS_JSON=path/to/pins.json pio run -e esp32dev`（ビルド）で差し替えられます。
+別のファイルを使うときは、ビルドとリリース生成の両方に同じファイルを渡してください（`--pins path/to/pins.json` と `PINS_JSON=path/to/pins.json pio run -e esp32dev`）。片方だけ差し替えるとファームウェアの `pinout` とマニフェストの `pins` がずれます。
 
 詳細は [SPEC.md](./SPEC.md) を参照してください。
 

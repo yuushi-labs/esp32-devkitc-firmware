@@ -336,9 +336,10 @@ def verify_release(output_dir: Path) -> dict:
                 )
 
     # The pin block is optional, but when it is present it must stay valid and
-    # the wiring notes must be displayable strings.
-    pins = manifest.get("pins")
-    if pins is not None:
+    # the wiring notes must be displayable strings. Check the key, not the
+    # value, so an explicit "pins": null is rejected instead of skipped.
+    if "pins" in manifest:
+        pins = manifest["pins"]
         try:
             validate_pin_list(pins, source="flash-manifest.json")
         except PinsManifestError as exc:

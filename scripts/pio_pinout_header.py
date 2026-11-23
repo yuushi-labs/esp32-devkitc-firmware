@@ -32,10 +32,16 @@ from pins_manifest import (  # noqa: E402 - after the sys.path tweak
 override = os.environ.get("PINS_JSON", "").strip()
 pins_path = Path(override) if override else project_dir / "pins.json"
 
+# On a hardware environment the board must match pins.json, exactly like the
+# release script does with --board. The native test environment has no board,
+# so the check is skipped there.
+board = env.subst("$BOARD").strip()  # noqa: F821
+expected_board = board if board and board != "native" else None
+
 document = None
 if pins_path.is_file():
     try:
-        document = load_pins_file(pins_path)
+        document = load_pins_file(pins_path, expected_board=expected_board)
     except PinsManifestError as exc:
         sys.stderr.write(f"error: {exc}\n")
         raise SystemExit(1)

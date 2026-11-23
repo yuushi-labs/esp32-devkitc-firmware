@@ -138,6 +138,24 @@ class BuildReleasePinsTest(unittest.TestCase):
             with self.assertRaises(SystemExit):
                 build.verify_release(output_dir)
 
+    def test_verify_release_rejects_a_null_pins_block(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output_dir = Path(tmp) / "dist"
+            document = build.load_pin_document(
+                write_pins(Path(tmp) / "pins.json"),
+                board="esp32dev",
+                explicit=True,
+            )
+            self.build(output_dir, document)
+
+            manifest_path = output_dir / "flash-manifest.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["pins"] = None
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+            with self.assertRaises(SystemExit):
+                build.verify_release(output_dir)
+
     def test_verify_release_rejects_a_non_string_wiring_note(self):
         with tempfile.TemporaryDirectory() as tmp:
             output_dir = Path(tmp) / "dist"
