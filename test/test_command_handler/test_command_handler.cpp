@@ -188,6 +188,67 @@ void test_long_token_with_known_prefix_is_unknown() {
                         static_cast<int>(fw::parseCommand(line).type));
 }
 
+
+void test_hardware_commands_parse() {
+  assertCommand(CommandType::kScan, "scan");
+  assertCommand(CommandType::kScan, "SCAN");
+  assertCommand(CommandType::kSensors, "sensors");
+  assertCommand(CommandType::kInputs, "inputs");
+  assertCommand(CommandType::kScan, " scan ");
+}
+
+void test_log_commands_parse_with_their_argument() {
+  assertCommand(CommandType::kLogStatus, "log");
+  assertCommand(CommandType::kLogStatus, "LOG");
+  assertCommand(CommandType::kLogOn, "log on");
+  assertCommand(CommandType::kLogOff, "log OFF");
+  assertCommand(CommandType::kLogNow, "log now");
+  assertCommand(CommandType::kLogClear, "log clear");
+
+  assertCommand(CommandType::kUnknown, "log maybe");
+  assertCommand(CommandType::kUnknown, "log on now");
+}
+
+void test_page_commands_carry_the_page_number() {
+  const fw::Command next = fw::parseCommand("page");
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(CommandType::kPageNext),
+                        static_cast<int>(next.type));
+
+  const fw::Command select = fw::parseCommand("page 3");
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(CommandType::kPageSelect),
+                        static_cast<int>(select.type));
+  TEST_ASSERT_EQUAL_UINT8(3, select.page);
+
+  TEST_ASSERT_EQUAL_UINT8(1, fw::parseCommand("PAGE 1").page);
+  TEST_ASSERT_EQUAL_UINT8(4, fw::parseCommand("page 4").page);
+
+  assertCommand(CommandType::kUnknown, "page 0");
+  assertCommand(CommandType::kUnknown, "page 5");
+  assertCommand(CommandType::kUnknown, "page 12");
+  assertCommand(CommandType::kUnknown, "page x");
+  assertCommand(CommandType::kUnknown, "page 2 3");
+}
+
+void test_help_text_lists_the_commands_of_each_firmware() {
+  const char* station = fw::commandHelpText(fw::FirmwareTarget::kStation);
+  TEST_ASSERT_NOT_NULL(std::strstr(station, "scan"));
+  TEST_ASSERT_NOT_NULL(std::strstr(station, "sensors"));
+  TEST_ASSERT_NOT_NULL(std::strstr(station, "log on"));
+  TEST_ASSERT_NOT_NULL(std::strstr(station, "log clear"));
+  TEST_ASSERT_NOT_NULL(std::strstr(station, "page 1..4"));
+  TEST_ASSERT_NULL(std::strstr(station, "inputs"));
+
+  const char* tester = fw::commandHelpText(fw::FirmwareTarget::kTester);
+  TEST_ASSERT_NOT_NULL(std::strstr(tester, "scan"));
+  TEST_ASSERT_NOT_NULL(std::strstr(tester, "sensors"));
+  TEST_ASSERT_NOT_NULL(std::strstr(tester, "inputs"));
+  TEST_ASSERT_NULL(std::strstr(tester, "log on"));
+
+  // The default argument follows the build target.
+  TEST_ASSERT_EQUAL_STRING(fw::commandHelpText(fw::kFirmwareTarget),
+                           fw::commandHelpText());
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -209,5 +270,9 @@ int main(int argc, char** argv) {
   RUN_TEST(test_line_buffer_accepts_an_empty_line);
   RUN_TEST(test_long_input_does_not_overflow_the_normaliser);
   RUN_TEST(test_long_token_with_known_prefix_is_unknown);
+  RUN_TEST(test_hardware_commands_parse);
+  RUN_TEST(test_log_commands_parse_with_their_argument);
+  RUN_TEST(test_page_commands_carry_the_page_number);
+  RUN_TEST(test_help_text_lists_the_commands_of_each_firmware);
   return UNITY_END();
 }

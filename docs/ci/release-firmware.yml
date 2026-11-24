@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Release version without the leading v (for example 0.1.0)"
+        description: "Release version without the leading v (for example 0.2.0)"
         required: true
         type: string
       publish:
@@ -28,7 +28,6 @@ concurrency:
 
 env:
   PLATFORMIO_CORE_DIR: ${{ github.workspace }}/.platformio
-  FIRMWARE_ENV: esp32dev
 
 jobs:
   version:
@@ -92,10 +91,23 @@ jobs:
       - name: Run native tests
         run: pio test -e native
 
+      - name: Run release script tests
+        run: python -m unittest discover -s tests/python
+
   firmware:
-    name: Build esp32dev firmware
+    name: Build ${{ matrix.variant }} firmware
     runs-on: ubuntu-latest
     needs: [version, native-tests]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - env: esp32dev_station
+            variant: station
+            artifact: firmware-station
+          - env: esp32dev_tester
+            variant: tester
+            artifact: firmware-tester
     steps:
       - name: Check out
         uses: actions/checkout@v4
@@ -117,7 +129,7 @@ jobs:
       - name: Build firmware
         env:
           FW_VERSION: ${{ needs.version.outputs.version }}
-        run: pio run -e "$FIRMWARE_ENV"
+        run: pio run -e "${{ matrix.env }}"
 
       - name: Build release binaries
         env:
@@ -125,19 +137,17 @@ jobs:
         run: |
           set -eu
           python scripts/build_release_bins.py \
-            --build-dir ".pio/build/$FIRMWARE_ENV" \
-            --output-dir dist \
+            --build-dir ".pio/build/${{ matrix.env }}" \
+            --output-dir "dist/${{ matrix.variant }}" \
             --version "$FW_VERSION" \
+            --variant "${{ matrix.variant }}" \
             --print-manifest
 
       - name: Upload release assets
         uses: actions/upload-artifact@v4
         with:
-          name: esp32-devkitc-firmware
-          path: |
-            dist/esp32-devkitc-firmware-merged.bin
-            dist/esp32-devkitc-firmware-app.bin
-            dist/flash-manifest.json
+          name: ${{ matrix.artifact }}
+          path: dist/${{ matrix.variant }}/*
           if-no-files-found: error
 
   release:
@@ -153,11 +163,27 @@ jobs:
       - name: Download release assets
         uses: actions/download-artifact@v4
         with:
-          name: esp32-devkitc-firmware
+          pattern: firmware-*
           path: dist
+          merge-multiple: true
 
       - name: Show assets
-        run: ls -l dist && sha256sum dist/*.bin
+        run: |
+          set -eu
+          ls -l dist
+          sha256sum dist/*.bin
+          for name in \
+            esp32-devkitc-station-merged.bin \
+            esp32-devkitc-station-app.bin \
+            esp32-devkitc-tester-merged.bin \
+            esp32-devkitc-tester-app.bin \
+            flash-manifest.json \
+            flash-manifest-tester.json; do
+            if [ ! -f "dist/$name" ]; then
+              echo "error: missing release asset $name" >&2
+              exit 1
+            fi
+          done
 
       - name: Check the tag points at the built commit
         env:
@@ -240,11 +266,36 @@ jobs:
           VERSION: ${{ needs.version.outputs.version }}
         run: |
           set -eu
+          cat > release-notes.md <<'EOF'
+          ## ファームウェア（2種類）
+
+          | ファイル | 用途 |
+          | --- | --- |
+          | `esp32-devkitc-station-merged.bin` | 🎛️ 環境ステーション本体（`0x0000` から書き込み） |
+          | `esp32-devkitc-station-app.bin` | station のアプリ単体（`0x10000`） |
+          | `flash-manifest.json` | station のマニフェスト（アプリが自動で読む既定のファイル） |
+          | `esp32-devkitc-tester-merged.bin` | 🧪 パーツ動作確認テスト（`0x0000` から書き込み） |
+          | `esp32-devkitc-tester-app.bin` | tester のアプリ単体（`0x10000`） |
+          | `flash-manifest-tester.json` | tester のマニフェスト |
+
+          書き込みは [esp32-devkitc-flasher](https://github.com/yuushi-labs/esp32-devkitc-flasher) の Release 選択から。まず `tester` で I2C・センサー・ボタンの配線を確認し、そのあと `station` を書き込むのがおすすめです。
+
+          ### 🎛️ station
+          - OLED に温度・気圧・湿度・記録状態を表示（エンコーダで4ページ切替）
+          - `CON` 短押しで手動記録、長押しで記録 ON/OFF、`PSH` で間隔切替（10秒/1分/5分）
+          - LittleFS の `/log.csv` に `uptime_ms,temp_c,pressure_hpa,humidity_pct` を追記（flasher の LittleFS 吸い出しで読み出し可能）
+
+          ### 🧪 tester
+          - 起動時と5秒ごとに I2C 全アドレスをスキャンして OLED / BMP280 を判定
+          - BMP280 の温度・気圧、DHT11/DHT22 の湿度・温度を表示
+          - エンコーダ位置と PSH / BAK / CON の押下をリアルタイム表示
+          - シリアルコマンド: `SCAN` / `SENSORS` / `INPUTS`
+          EOF
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
             gh release upload "$TAG" dist/* --clobber --repo "$GITHUB_REPOSITORY"
           else
             gh release create "$TAG" dist/* \
               --repo "$GITHUB_REPOSITORY" \
               --title "esp32-devkitc-firmware v$VERSION" \
-              --generate-notes
+              --notes-file release-notes.md
           fi

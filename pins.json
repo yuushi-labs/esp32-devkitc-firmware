@@ -3,6 +3,59 @@
   "board": "esp32dev",
   "pins": [
     {
+      "gpio": 21,
+      "label": "I2C SDA (OLED SDA + BMP280 SDA)",
+      "direction": "input_output",
+      "note": "OLED モジュールと BMP280 の SDA を並列に接続。3.3V でプルアップされているモジュールなら追加抵抗は不要"
+    },
+    {
+      "gpio": 22,
+      "label": "I2C SCL (OLED SCL + BMP280 SCL)",
+      "direction": "input_output",
+      "note": "SDA と同じバス。OLED と BMP280 の SCL を並列に接続し、VCC は 3.3V から供給"
+    },
+    {
+      "gpio": 32,
+      "label": "ロータリーエンコーダ A相 (TRA)",
+      "direction": "input_pullup",
+      "activeLevel": "LOW",
+      "note": "内部プルアップで使用。回転方向が逆のときはアプリ側設定で反転できる"
+    },
+    {
+      "gpio": 33,
+      "label": "ロータリーエンコーダ B相 (TRB)",
+      "direction": "input_pullup",
+      "activeLevel": "LOW",
+      "note": "A相とセットで1クリック4遷移。GPIO34〜39 は内部プルアップがないため使わない"
+    },
+    {
+      "gpio": 25,
+      "label": "エンコーダ押し込みボタン (PSH)",
+      "direction": "input_pullup",
+      "activeLevel": "LOW",
+      "note": "ステーションでは記録間隔の切替 (10秒→1分→5分) に使う"
+    },
+    {
+      "gpio": 26,
+      "label": "戻るボタン (BAK)",
+      "direction": "input_pullup",
+      "activeLevel": "LOW",
+      "note": "ステーションでは前のページ、テスターでは次のページへ移動"
+    },
+    {
+      "gpio": 27,
+      "label": "決定ボタン (CON)",
+      "direction": "input_pullup",
+      "activeLevel": "LOW",
+      "note": "短押しで手動ログ記録、長押し(0.9秒)で記録ON/OFF。テスターでは I2C 再スキャン"
+    },
+    {
+      "gpio": 4,
+      "label": "温湿度センサー DATA (DHT11 / DHT22)",
+      "direction": "input_output",
+      "note": "DATA は 10kΩ で 3.3V へプルアップ。未接続でもファームウェアは停止せず湿度だけスキップする"
+    },
+    {
       "gpio": 2,
       "label": "オンボード青色LED / 外部LED出力",
       "direction": "output",
@@ -17,10 +70,12 @@
       "note": "通常は自動リセットで操作不要。書き込みに失敗するときだけ押しながら EN(RST) を押す"
     }
   ],
-  "powerNote": "3.3Vロジック専用（5V入力禁止）。5V を使う場合は VIN へ接続",
+  "powerNote": "3.3Vロジック専用（5V入力禁止）。OLED・BMP280・DHT はすべて 3.3V と GND を共通にして給電し、5V が必要な場合は VIN へ接続",
   "notes": [
     "GPIO6〜11 は内蔵フラッシュ専用のため外部に接続しない",
-    "GPIO34〜39 は入力専用（内部プルアップ/プルダウンなし）",
-    "ストラップピン (GPIO0/2/5/12/15) は起動時のレベルでブートモードが変わるため、外部回路が起動時に影響しないようにする"
+    "GPIO34〜39 は入力専用で内部プルアップがないため、エンコーダとボタンには GPIO25/26/27/32/33 を使う",
+    "OLED と BMP280 は SDA(GPIO21)/SCL(GPIO22) を並列に共有する（I2C アドレスは OLED 0x3C/0x3D、BMP280 0x76/0x77 を自動探索）",
+    "ストラップピン (GPIO0/2/5/12/15) は起動時のレベルでブートモードが変わるため、外部回路が起動時に影響しないようにする",
+    "OLED + エンコーダ一体モジュールの VCC は 3.3V へ。5V 専用表記のモジュールはレベル変換が必要"
   ]
 }

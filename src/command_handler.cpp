@@ -136,6 +136,35 @@ Command parseCommand(const char* line) {
     command.type = CommandType::kInfo;
   } else if (equalsIgnoreCase(verbText, "pinout") && arg == nullptr) {
     command.type = CommandType::kPinout;
+  } else if (equalsIgnoreCase(verbText, "scan") && arg == nullptr) {
+    command.type = CommandType::kScan;
+  } else if (equalsIgnoreCase(verbText, "sensors") && arg == nullptr) {
+    command.type = CommandType::kSensors;
+  } else if (equalsIgnoreCase(verbText, "inputs") && arg == nullptr) {
+    command.type = CommandType::kInputs;
+  } else if (equalsIgnoreCase(verbText, "log") && extra == nullptr) {
+    if (arg == nullptr) {
+      command.type = CommandType::kLogStatus;
+    } else if (equalsIgnoreCase(arg, "on")) {
+      command.type = CommandType::kLogOn;
+    } else if (equalsIgnoreCase(arg, "off")) {
+      command.type = CommandType::kLogOff;
+    } else if (equalsIgnoreCase(arg, "now")) {
+      command.type = CommandType::kLogNow;
+    } else if (equalsIgnoreCase(arg, "clear")) {
+      command.type = CommandType::kLogClear;
+    } else {
+      command.type = CommandType::kUnknown;
+    }
+  } else if (equalsIgnoreCase(verbText, "page") && extra == nullptr) {
+    if (arg == nullptr) {
+      command.type = CommandType::kPageNext;
+    } else if (arg[1] == '\0' && arg[0] >= '1' && arg[0] <= '4') {
+      command.type = CommandType::kPageSelect;
+      command.page = static_cast<uint8_t>(arg[0] - '0');
+    } else {
+      command.type = CommandType::kUnknown;
+    }
   } else if (equalsIgnoreCase(verbText, "led") && arg != nullptr && extra == nullptr) {
     command.hasLedMode = true;
     if (equalsIgnoreCase(arg, "on")) {
@@ -158,7 +187,20 @@ Command parseCommand(const char* line) {
   return command;
 }
 
-const char* commandHelpText() {
+const char* commandHelpText(FirmwareTarget target) {
+  if (target == FirmwareTarget::kTester) {
+    return "commands:\n"
+           "  help       show this help\n"
+           "  ping       reply with pong\n"
+           "  info       show chip and firmware information\n"
+           "  pinout     show the GPIO wiring for this firmware\n"
+           "  led on     turn the onboard LED on\n"
+           "  led off    turn the onboard LED off\n"
+           "  led blink  blink the onboard LED (1 s period)\n"
+           "  scan       scan the I2C bus and name every device\n"
+           "  sensors    show the BMP280 and DHT status\n"
+           "  inputs     show the encoder and button counters\n";
+  }
   return "commands:\n"
          "  help       show this help\n"
          "  ping       reply with pong\n"
@@ -166,7 +208,16 @@ const char* commandHelpText() {
          "  pinout     show the GPIO wiring for this firmware\n"
          "  led on     turn the onboard LED on\n"
          "  led off    turn the onboard LED off\n"
-         "  led blink  blink the onboard LED (1 s period)\n";
+         "  led blink  blink the onboard LED (1 s period)\n"
+         "  scan       scan the I2C bus and name every device\n"
+         "  sensors    show the BMP280 and DHT status\n"
+         "  log        show the LittleFS log state\n"
+         "  log on     start recording /log.csv\n"
+         "  log off    stop recording\n"
+         "  log now    write one sample immediately\n"
+         "  log clear  delete /log.csv and start over\n"
+         "  page       go to the next page\n"
+         "  page 1..4  jump to a page\n";
 }
 
 namespace {

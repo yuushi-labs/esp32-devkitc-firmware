@@ -7,6 +7,8 @@
 #include <cstddef>
 #include <cstdint>
 
+#include "app_config.h"
+
 namespace fw {
 
 enum class LedMode { kBlink, kOn, kOff };
@@ -22,6 +24,20 @@ enum class CommandType {
   kLedOn,
   kLedOff,
   kLedBlink,
+  // Shared by both firmwares.
+  kScan,
+  kSensors,
+  // Tester firmware.
+  kInputs,
+  // Station firmware.
+  kLogStatus,
+  kLogOn,
+  kLogOff,
+  kLogNow,
+  kLogClear,
+  kPageNext,
+  kPagePrev,
+  kPageSelect,
   kUnknown,
 };
 
@@ -29,6 +45,8 @@ struct Command {
   CommandType type = CommandType::kNone;
   bool hasLedMode = false;
   LedMode ledMode = LedMode::kBlink;
+  // 1 based page number for kPageSelect.
+  uint8_t page = 0;
 };
 
 // Accepts '\n' terminated lines, tolerates a trailing '\r', and reports
@@ -61,7 +79,8 @@ class LineBuffer {
 // matching is case insensitive.
 Command parseCommand(const char* line);
 
-const char* commandHelpText();
+// Help text for the firmware flavour that is being built.
+const char* commandHelpText(FirmwareTarget target = kFirmwareTarget);
 
 struct DeviceStatus {
   const char* version;
