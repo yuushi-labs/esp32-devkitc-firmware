@@ -220,9 +220,18 @@ void test_header_failure_blocks_data_until_it_is_rewritten() {
   storage.failWrites = false;
   TEST_ASSERT_TRUE(recorder.record(fullSample(), 1000));
   TEST_ASSERT_EQUAL_UINT32(1, recorder.recordCount());
+  LogSample second;
+  second.uptimeMs = 2000;
+  TEST_ASSERT_TRUE(recorder.record(second, 2000));
+  TEST_ASSERT_EQUAL_UINT32(2, recorder.recordCount());
+
+  // Exactly one header, then the two data rows.
   TEST_ASSERT_EQUAL_STRING("uptime_ms,temp_c,pressure_hpa,humidity_pct\n"
-                           "1234,23.46,1006.53,45.0\n",
+                           "1234,23.46,1006.53,45.0\n"
+                           "2000,,,\n",
                            storage.content.c_str());
+  TEST_ASSERT_EQUAL_UINT32(3, static_cast<uint32_t>(std::count(
+                                  storage.content.begin(), storage.content.end(), '\n')));
 }
 
 void test_a_failed_write_is_not_retried_on_every_loop() {

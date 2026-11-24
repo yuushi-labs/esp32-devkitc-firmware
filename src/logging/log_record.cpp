@@ -196,9 +196,12 @@ bool LogRecorder::record(const LogSample& sample, uint32_t nowMs) {
   hasAttempted_ = true;
   lastAttemptMs_ = nowMs;
 
-  if (!headerReady_ && !writeHeader()) {
-    lastWriteOk_ = false;
-    return false;
+  if (!headerReady_) {
+    headerReady_ = writeHeader();
+    if (!headerReady_) {
+      lastWriteOk_ = false;
+      return false;
+    }
   }
 
   char line[96];

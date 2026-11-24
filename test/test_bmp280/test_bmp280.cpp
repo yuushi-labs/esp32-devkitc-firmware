@@ -2,6 +2,7 @@
 
 #include <cmath>
 #include <cstring>
+#include <vector>
 
 #include "sensors/bmp280.h"
 #include "test_support/fake_i2c.h"
@@ -157,24 +158,25 @@ void test_begin_detects_the_sensor_and_configures_it() {
   TEST_ASSERT_EQUAL_UINT8(0x27, bus.registerValue(0x76, fw::kBmp280CtrlMeasRegister));
   TEST_ASSERT_EQUAL_UINT8(0x80, bus.registerValue(0x76, fw::kBmp280ConfigRegister));
 
-  // Sleep, config, normal: the config write happens while the sensor is idle.
-  size_t ctrlWrites = 0;
-  bool sawSleepBeforeConfig = false;
-  bool sawConfig = false;
+  // The configuration writes must follow sleep -> config -> normal so the
+  // config register is not ignored while a conversion is running.
+  std::vector<uint8_t> registers;
+  std::vector<uint8_t> values;
   for (const std::vector<uint8_t>& write : bus.writeLog) {
-    if (write.size() == 2 && write[0] == fw::kBmp280CtrlMeasRegister) {
-      ++ctrlWrites;
-      if (write[1] == 0x00 && !sawConfig) {
-        sawSleepBeforeConfig = true;
-      }
-    }
-    if (write.size() == 2 && write[0] == fw::kBmp280ConfigRegister) {
-      sawConfig = true;
+    if (write.size() == 2 &&
+        (write[0] == fw::kBmp280CtrlMeasRegister ||
+         write[0] == fw::kBmp280ConfigRegister)) {
+      registers.push_back(write[0]);
+      values.push_back(write[1]);
     }
   }
-  TEST_ASSERT_TRUE(sawSleepBeforeConfig);
-  TEST_ASSERT_TRUE(sawConfig);
-  TEST_ASSERT_EQUAL_UINT32(2, static_cast<uint32_t>(ctrlWrites));
+  TEST_ASSERT_EQUAL_UINT32(3, static_cast<uint32_t>(registers.size()));
+  TEST_ASSERT_EQUAL_UINT8(fw::kBmp280CtrlMeasRegister, registers[0]);
+  TEST_ASSERT_EQUAL_UINT8(0x00, values[0]);  // sleep
+  TEST_ASSERT_EQUAL_UINT8(fw::kBmp280ConfigRegister, registers[1]);
+  TEST_ASSERT_EQUAL_UINT8(0x80, values[1]);  // 500 ms standby
+  TEST_ASSERT_EQUAL_UINT8(fw::kBmp280CtrlMeasRegister, registers[2]);
+  TEST_ASSERT_EQUAL_UINT8(0x27, values[2]);  // normal
 }
 
 void test_begin_reports_a_missing_sensor() {
