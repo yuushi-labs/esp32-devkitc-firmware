@@ -100,25 +100,20 @@ size_t formatI2cEntry(const I2cScanEntry& entry, char* out, size_t outSize) {
 }
 
 size_t formatI2cAddressList(const I2cScanResult& scan, char* out, size_t outSize) {
-  if (scan.empty()) {
-    if (out != nullptr && outSize > 0) {
-      std::snprintf(out, outSize, "none");
-    }
-    return 4;
-  }
+  // "none", or "0x3C" for every entry plus one comma between entries.
+  const size_t needed = scan.empty() ? 4 : scan.count * 4 + (scan.count - 1);
   if (out == nullptr || outSize == 0) {
-    // "0x3C" plus a comma between entries.
-    return scan.count * 4 + (scan.count - 1);
+    return needed;
   }
+
   size_t used = 0;
   out[0] = '\0';
   if (scan.empty()) {
     std::snprintf(out, outSize, "none");
-    return 4;
+    return needed;
   }
-  for (size_t index = 0; index < scan.count; ++index) {
-    const int written = std::snprintf(used < outSize ? out + used : nullptr,
-                                      used < outSize ? outSize - used : 0, "%s0x%02X",
+  for (size_t index = 0; index < scan.count && used + 1 < outSize; ++index) {
+    const int written = std::snprintf(out + used, outSize - used, "%s0x%02X",
                                       index == 0 ? "" : ",",
                                       scan.entries[index].address);
     if (written <= 0) {
@@ -128,7 +123,7 @@ size_t formatI2cAddressList(const I2cScanResult& scan, char* out, size_t outSize
                 ? static_cast<size_t>(written)
                 : outSize - used;
   }
-  return used;
+  return needed;
 }
 
 size_t formatI2cScan(const I2cScanResult& scan, char* out, size_t outSize) {

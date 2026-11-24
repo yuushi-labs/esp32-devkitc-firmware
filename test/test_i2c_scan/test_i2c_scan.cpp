@@ -110,6 +110,14 @@ void test_address_list_is_compact() {
   TEST_ASSERT_EQUAL_UINT32(9, static_cast<uint32_t>(
                                   fw::formatI2cAddressList(scan, nullptr, 0)));
 
+  // A truncated destination still reports the full length.
+  char small[6];
+  TEST_ASSERT_EQUAL_UINT32(9, static_cast<uint32_t>(
+                                  fw::formatI2cAddressList(scan, small, sizeof(small))));
+  TEST_ASSERT_EQUAL_UINT32(sizeof(small) - 1,
+                           static_cast<uint32_t>(std::strlen(small)));
+  TEST_ASSERT_EQUAL_STRING("0x3C,", small);
+
   char empty[16];
   fw::formatI2cAddressList(I2cScanResult{}, empty, sizeof(empty));
   TEST_ASSERT_EQUAL_STRING("none", empty);
