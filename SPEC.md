@@ -160,7 +160,7 @@ I2C は 100 kHz。`Wire.setTimeOut(50)` で未接続デバイスによるブロ�
 | --- | --- | --- |
 | `esp32-devkitc-<variant>-merged.bin` | `0x0000` | bootloader（`0x1000`）+ partitions（`0x8000`）+ boot_app0（`0xe000`）+ app（`0x10000`）を `0xFF` 埋めで結合 |
 | `esp32-devkitc-<variant>-app.bin` | `0x10000` | アプリ単体 |
-| `flash-manifest.json`（station） / `flash-manifest-tester.json`（tester） | — | オフセット・サイズ・SHA-256・バージョン・`variant`・`pins`・`wiringNotes`・`filesystems`（station のみ） |
+| `flash-manifest.json`（station） / `tester-flash-manifest.json`（tester） | — | オフセット・サイズ・SHA-256・バージョン・`variant`・`pins`・`wiringNotes`・`filesystems`（station のみ） |
 
 - 生成後は自動で全ハッシュとオフセットを再検証する。`--verify-only --variant station` で再検証のみ可能
 - `--variant` 省略時は v0.1.x 互換の `esp32-devkitc-firmware-*.bin` / `flash-manifest.json` を出力

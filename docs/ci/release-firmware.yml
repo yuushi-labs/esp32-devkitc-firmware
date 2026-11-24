@@ -178,7 +178,7 @@ jobs:
             esp32-devkitc-tester-merged.bin \
             esp32-devkitc-tester-app.bin \
             flash-manifest.json \
-            flash-manifest-tester.json; do
+            tester-flash-manifest.json; do
             if [ ! -f "dist/$name" ]; then
               echo "error: missing release asset $name" >&2
               exit 1
@@ -276,7 +276,7 @@ jobs:
           | `flash-manifest.json` | station のマニフェスト（アプリが自動で読む既定のファイル） |
           | `esp32-devkitc-tester-merged.bin` | 🧪 パーツ動作確認テスト（`0x0000` から書き込み） |
           | `esp32-devkitc-tester-app.bin` | tester のアプリ単体（`0x10000`） |
-          | `flash-manifest-tester.json` | tester のマニフェスト |
+          | `tester-flash-manifest.json` | tester のマニフェスト |
 
           書き込みは [esp32-devkitc-flasher](https://github.com/yuushi-labs/esp32-devkitc-flasher) の Release 選択から。まず `tester` で I2C・センサー・ボタンの配線を確認し、そのあと `station` を書き込むのがおすすめです。
 

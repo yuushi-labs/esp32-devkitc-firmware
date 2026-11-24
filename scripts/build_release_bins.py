@@ -74,7 +74,10 @@ VARIANTS: dict[str | None, VariantNaming] = {
         "tester",
         "パーツ動作確認テスト (tester)",
         "esp32-devkitc-tester",
-        "flash-manifest-tester.json",
+        # Deliberately sorts after "flash-manifest.json": older flasher builds
+        # take the first asset named exactly flash-manifest.json, so the station
+        # firmware stays the default while a v0.2.0 flasher can list variants.
+        "tester-flash-manifest.json",
     ),
 }
 

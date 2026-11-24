@@ -133,9 +133,9 @@ ESP32-DevKitC 向けのファームウェアリポジトリです。1 つのコ�
 | `flash-manifest.json` | station のマニフェスト（**既定**。書き込みアプリはこれを自動で読みます） |
 | `esp32-devkitc-tester-merged.bin` | tester 用の結合イメージ（`0x0000`） |
 | `esp32-devkitc-tester-app.bin` | tester のアプリ単体（`0x10000`） |
-| `flash-manifest-tester.json` | tester のマニフェスト |
+| `tester-flash-manifest.json` | tester のマニフェスト |
 
-`flash-manifest.json` / `flash-manifest-tester.json` には `variant`（`station` / `tester`）と `variantLabel` が入ります。station のマニフェストだけは、書き込みアプリがログ領域を案内できるよう `filesystems` を持ちます。
+`flash-manifest.json` / `tester-flash-manifest.json` には `variant`（`station` / `tester`）と `variantLabel` が入ります。station のマニフェストだけは、書き込みアプリがログ領域を案内できるよう `filesystems` を持ちます。
 
 ```json
 "filesystems": [
