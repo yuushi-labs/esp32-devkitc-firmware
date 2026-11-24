@@ -1,17 +1,31 @@
 // ESP32-DevKitC firmware entry point.
 //
-// Behaviour (see SPEC.md):
-//   - boot banner with version, chip model, chip id and reset reason
+// Two builds share this file (see platformio.ini):
+//   FW_TARGET_STATION - environment station: OLED pages, BMP280 + DHT, encoder
+//                       and buttons, LittleFS CSV log
+//   FW_TARGET_TESTER  - parts tester: I2C scan, sensor status, live input echo
+//
+// Common behaviour (see SPEC.md):
+//   - boot banner with version, board, target, chip model, chip id, reset reason
 //   - onboard LED on GPIO2 blinking at a 1 s period
 //   - 5 s heartbeat log with uptime, free heap and LED mode
-//   - serial commands: help, ping, info, pinout, led on/off/blink
+//   - serial commands: help, ping, info, pinout, led on/off/blink, plus the
+//     target specific commands listed by `help`
 
 #include <Arduino.h>
 #include <esp_system.h>
 
+#include <cstdio>
+
 #include "app_config.h"
 #include "command_handler.h"
 #include "pinout.h"
+
+#if defined(FW_TARGET_TESTER)
+#include "tester/tester_app.h"
+#else
+#include "station/station_app.h"
+#endif
 
 namespace {
 
@@ -22,6 +36,12 @@ fw::LedMode g_ledMode = fw::LedMode::kBlink;
 bool g_ledState = false;
 uint32_t g_lastBlinkMs = 0;
 uint32_t g_lastHeartbeatMs = 0;
+
+#if defined(FW_TARGET_TESTER)
+fw::TesterApp g_app;
+#else
+fw::StationApp g_app;
+#endif
 
 const char* resetReasonName(esp_reset_reason_t reason) {
   switch (reason) {
@@ -85,6 +105,7 @@ void printBanner() {
   const fw::DeviceStatus status = currentStatus();
   fw::formatBanner(status, buffer, sizeof(buffer));
   Serial.print(buffer);
+  Serial.printf("target=%s\n", fw::firmwareTargetName());
 }
 
 void printInfo() {
@@ -92,6 +113,7 @@ void printInfo() {
   const fw::DeviceStatus status = currentStatus();
   fw::formatInfo(status, buffer, sizeof(buffer));
   Serial.print(buffer);
+  Serial.printf("target=%s\n", fw::firmwareTargetName());
 }
 
 void printHeartbeat() {
@@ -104,7 +126,7 @@ void printHeartbeat() {
 void printPinout() {
   // pins.json notes are free text, so allow a generous buffer and report when
   // the destination was too small instead of silently cutting the list.
-  static char buffer[1024];
+  static char buffer[4096];
   const fw::PinoutTable table = fw::embeddedPinout();
   const size_t needed = fw::formatPinout(table, buffer, sizeof(buffer));
   Serial.print(buffer);
@@ -126,7 +148,7 @@ void handleLine(const char* line, bool overflowed) {
     case fw::CommandType::kNone:
       return;
     case fw::CommandType::kHelp:
-      Serial.print(fw::commandHelpText());
+      Serial.print(fw::commandHelpText(fw::kFirmwareTarget));
       return;
     case fw::CommandType::kPing:
       Serial.println("pong");
@@ -143,8 +165,12 @@ void handleLine(const char* line, bool overflowed) {
       setLedMode(command.ledMode);
       Serial.printf("led mode: %s\n", fw::ledModeName(command.ledMode));
       return;
-    case fw::CommandType::kUnknown:
+    default:
       break;
+  }
+
+  if (g_app.handleCommand(command)) {
+    return;
   }
 
   Serial.printf("error: unknown command '%s'\n", line);
@@ -192,10 +218,12 @@ void setup() {
   g_lastHeartbeatMs = nowMs;
 
   printBanner();
+  g_app.begin();
 }
 
 void loop() {
   pollSerial();
+  g_app.loop();
 
   const uint32_t nowMs = millis();
   serviceLed(nowMs);

@@ -28,36 +28,54 @@ void test_embedded_pinout_matches_pins_json() {
 
   TEST_ASSERT_EQUAL_INT(1, table.schemaVersion);
   TEST_ASSERT_NOT_NULL(table.pins);
-  TEST_ASSERT_EQUAL_UINT32(2, static_cast<uint32_t>(table.pinCount));
+  TEST_ASSERT_EQUAL_UINT32(10, static_cast<uint32_t>(table.pinCount));
   TEST_ASSERT_EQUAL_STRING("esp32dev", table.board);
 
-  TEST_ASSERT_EQUAL_INT(2, table.pins[0].gpio);
-  TEST_ASSERT_EQUAL_STRING("output", table.pins[0].direction);
-  TEST_ASSERT_EQUAL_STRING("HIGH", table.pins[0].activeLevel);
-  TEST_ASSERT_NOT_EQUAL('\0', table.pins[0].label[0]);
-  TEST_ASSERT_NOT_EQUAL('\0', table.pins[0].note[0]);
+  // I2C bus first: OLED and BMP280 share SDA21/SCL22.
+  TEST_ASSERT_EQUAL_INT(21, table.pins[0].gpio);
+  TEST_ASSERT_EQUAL_STRING("input_output", table.pins[0].direction);
+  TEST_ASSERT_EQUAL_INT(22, table.pins[1].gpio);
 
-  TEST_ASSERT_EQUAL_INT(0, table.pins[1].gpio);
-  TEST_ASSERT_EQUAL_STRING("input_pullup", table.pins[1].direction);
-  TEST_ASSERT_EQUAL_STRING("LOW", table.pins[1].activeLevel);
+  // Encoder phases and the three buttons.
+  TEST_ASSERT_EQUAL_INT(32, table.pins[2].gpio);
+  TEST_ASSERT_EQUAL_STRING("input_pullup", table.pins[2].direction);
+  TEST_ASSERT_EQUAL_INT(33, table.pins[3].gpio);
+  TEST_ASSERT_EQUAL_INT(25, table.pins[4].gpio);
+  TEST_ASSERT_EQUAL_STRING("LOW", table.pins[4].activeLevel);
+  TEST_ASSERT_EQUAL_INT(26, table.pins[5].gpio);
+  TEST_ASSERT_EQUAL_INT(27, table.pins[6].gpio);
+
+  // DHT data, onboard LED and the boot button.
+  TEST_ASSERT_EQUAL_INT(4, table.pins[7].gpio);
+  TEST_ASSERT_EQUAL_INT(2, table.pins[8].gpio);
+  TEST_ASSERT_EQUAL_STRING("output", table.pins[8].direction);
+  TEST_ASSERT_EQUAL_STRING("HIGH", table.pins[8].activeLevel);
+  TEST_ASSERT_EQUAL_INT(0, table.pins[9].gpio);
+  TEST_ASSERT_EQUAL_STRING("input_pullup", table.pins[9].direction);
+
+  for (size_t index = 0; index < table.pinCount; ++index) {
+    TEST_ASSERT_NOT_EQUAL('\0', table.pins[index].label[0]);
+    TEST_ASSERT_NOT_EQUAL('\0', table.pins[index].note[0]);
+  }
 
   TEST_ASSERT_NOT_EQUAL('\0', table.powerNote[0]);
-  TEST_ASSERT_EQUAL_UINT32(3, static_cast<uint32_t>(table.noteCount));
+  TEST_ASSERT_EQUAL_UINT32(5, static_cast<uint32_t>(table.noteCount));
 }
 
 void test_pinout_lists_every_pin_and_note() {
   const fw::PinoutTable table = fw::embeddedPinout();
 
-  char out[1024];
+  char out[4096];
   const size_t needed = fw::formatPinout(table, out, sizeof(out));
 
   TEST_ASSERT_EQUAL_UINT32(static_cast<uint32_t>(std::strlen(out)),
                            static_cast<uint32_t>(needed));
-  assertContains(out, "pinout board=esp32dev pins=2\n");
-  assertContains(out, "GPIO2 output active=HIGH ");
+  assertContains(out, "pinout board=esp32dev pins=10\n");
+  assertContains(out, "GPIO21 input_output ");
   assertContains(out, table.pins[0].label);
   assertContains(out, "  note: ");
   assertContains(out, table.pins[0].note);
+  assertContains(out, "GPIO25 input_pullup active=LOW ");
   assertContains(out, "GPIO0 input_pullup active=LOW ");
   assertContains(out, "power: ");
   assertContains(out, table.powerNote);
@@ -120,7 +138,7 @@ void test_empty_table_reports_missing_pin_data() {
 void test_zero_sized_buffer_reports_the_needed_length() {
   const fw::PinoutTable table = fw::embeddedPinout();
 
-  char out[1024];
+  char out[4096];
   const size_t expected = fw::formatPinout(table, out, sizeof(out));
   const size_t needed = fw::formatPinout(table, nullptr, 0);
 

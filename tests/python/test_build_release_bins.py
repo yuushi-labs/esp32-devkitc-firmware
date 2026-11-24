@@ -222,9 +222,11 @@ class CommandLineTest(unittest.TestCase):
             manifest = json.loads(
                 (output_dir / "flash-manifest.json").read_text(encoding="utf-8")
             )
-            # The repository's pins.json describes the sample firmware.
-            self.assertEqual({pin["gpio"] for pin in manifest["pins"]},
-                             {0, 2})
+            # The repository's pins.json describes the station wiring.
+            self.assertEqual(
+                {pin["gpio"] for pin in manifest["pins"]},
+                {0, 2, 4, 21, 22, 25, 26, 27, 32, 33},
+            )
 
     def test_cli_accepts_an_explicit_pins_path(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -245,6 +247,108 @@ class CommandLineTest(unittest.TestCase):
                 (output_dir / "flash-manifest.json").read_text(encoding="utf-8")
             )
             self.assertEqual([pin["gpio"] for pin in manifest["pins"]], [2])
+
+
+class VariantReleaseTest(unittest.TestCase):
+    """v0.2.0 ships two firmwares in one release."""
+
+    def build(self, output_dir: Path, variant: str | None) -> dict:
+        return build.build_release(
+            build_dir=make_build_dir(output_dir.parent),
+            output_dir=output_dir,
+            version="0.2.0",
+            chip="esp32",
+            board="esp32dev",
+            flash_mode="dio",
+            flash_freq="40m",
+            flash_size="4MB",
+            extra_source_dirs=(),
+            pin_document=None,
+            variant=variant,
+        )
+
+    def test_station_assets_keep_the_default_manifest_name(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output_dir = Path(tmp) / "dist"
+            manifest = self.build(output_dir, "station")
+
+            self.assertEqual(manifest["variant"], "station")
+            self.assertIn("station", manifest["variantLabel"])
+            self.assertEqual(manifest["merged"]["filename"],
+                             "esp32-devkitc-station-merged.bin")
+            self.assertEqual(manifest["parts"][0]["filename"],
+                             "esp32-devkitc-station-app.bin")
+            self.assertTrue((output_dir / "flash-manifest.json").is_file())
+            self.assertFalse((output_dir / "flash-manifest-tester.json").exists())
+
+            filesystem = manifest["filesystems"][0]
+            self.assertEqual(filesystem["type"], "littlefs")
+            self.assertEqual(int(filesystem["offset"], 16), 0x290000)
+            self.assertEqual(filesystem["size"], 0x160000)
+            self.assertEqual(filesystem["logFile"], "/log.csv")
+
+            build.verify_release(output_dir, "flash-manifest.json")
+
+    def test_tester_has_its_own_manifest_and_no_log_partition(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output_dir = Path(tmp) / "dist"
+            manifest = self.build(output_dir, "tester")
+
+            self.assertEqual(manifest["variant"], "tester")
+            self.assertNotIn("filesystems", manifest)
+            self.assertEqual(manifest["merged"]["filename"],
+                             "esp32-devkitc-tester-merged.bin")
+            self.assertTrue((output_dir / "flash-manifest-tester.json").is_file())
+            self.assertFalse((output_dir / "flash-manifest.json").exists())
+
+            build.verify_release(output_dir, "flash-manifest-tester.json")
+
+    def test_legacy_names_without_a_variant_are_unchanged(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output_dir = Path(tmp) / "dist"
+            manifest = self.build(output_dir, None)
+
+            self.assertNotIn("variant", manifest)
+            self.assertNotIn("filesystems", manifest)
+            self.assertEqual(manifest["merged"]["filename"],
+                             build.MERGED_FILENAME)
+            build.verify_release(output_dir)
+
+    def test_unknown_variant_is_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaises(SystemExit):
+                self.build(Path(tmp) / "dist", "prototype")
+
+    def test_cli_selects_the_variant_and_manifest(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            build_dir = make_build_dir(root)
+            output_dir = root / "dist"
+            exit_code = build.main([
+                "--build-dir", str(build_dir),
+                "--output-dir", str(output_dir),
+                "--version", "0.2.0",
+                "--variant", "tester",
+            ])
+            self.assertEqual(exit_code, 0)
+            self.assertTrue((output_dir / "flash-manifest-tester.json").is_file())
+            self.assertTrue((output_dir / "esp32-devkitc-tester-merged.bin").is_file())
+
+    def test_verify_rejects_a_broken_filesystem_block(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output_dir = Path(tmp) / "dist"
+            manifest = self.build(output_dir, "station")
+            manifest["filesystems"][0]["offset"] = "not-a-number"
+            (output_dir / "flash-manifest.json").write_text(
+                json.dumps(manifest), encoding="utf-8"
+            )
+            with self.assertRaises(SystemExit):
+                build.verify_release(output_dir, "flash-manifest.json")
+
+    def test_verify_rejects_a_missing_manifest(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaises(SystemExit):
+                build.verify_release(Path(tmp) / "dist", "flash-manifest-tester.json")
 
 
 if __name__ == "__main__":

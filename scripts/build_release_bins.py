@@ -32,6 +32,7 @@ import json
 import os
 import subprocess
 import sys
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -44,9 +45,57 @@ from pins_manifest import (  # noqa: E402 - after the sys.path tweak
     validate_pin_list,
 )
 
+# Legacy single firmware names, still the default so older callers and the
+# existing tests keep producing exactly the same assets.
 MERGED_FILENAME = "esp32-devkitc-firmware-merged.bin"
 APP_FILENAME = "esp32-devkitc-firmware-app.bin"
 MANIFEST_FILENAME = "flash-manifest.json"
+
+
+@dataclass(frozen=True)
+class VariantNaming:
+    """Asset names and manifest name for one firmware variant."""
+
+    key: str | None
+    label: str
+    prefix: str
+    manifest: str
+
+
+VARIANTS: dict[str | None, VariantNaming] = {
+    None: VariantNaming(None, "firmware", "esp32-devkitc-firmware", MANIFEST_FILENAME),
+    "station": VariantNaming(
+        "station",
+        "環境ステーション (station)",
+        "esp32-devkitc-station",
+        MANIFEST_FILENAME,
+    ),
+    "tester": VariantNaming(
+        "tester",
+        "パーツ動作確認テスト (tester)",
+        "esp32-devkitc-tester",
+        "flash-manifest-tester.json",
+    ),
+}
+
+# The station firmware logs CSV samples to LittleFS on the standard
+# `default.csv` spiffs partition, so the Android flasher can pull that image
+# back out and read /log.csv.
+STATION_FILESYSTEMS = (
+    {
+        "type": "littlefs",
+        "label": "spiffs",
+        "offset": "0x290000",
+        "size": 0x160000,
+        "mountPoint": "/littlefs",
+        "format": "csv",
+        "logFile": "/log.csv",
+        "notes": (
+            "default.csv の spiffs パーティション。station ファームが "
+            "/log.csv (uptime_ms,temp_c,pressure_hpa,humidity_pct) を追記する"
+        ),
+    },
+)
 
 MERGED_OFFSET = 0x0000
 FLASH_FILL_BYTE = 0xFF
@@ -187,8 +236,15 @@ def build_release(
     extra_source_dirs: tuple[Path, ...],
     boot_app0_path: Path | None = None,
     pin_document: dict | None = None,
+    variant: str | None = None,
 ) -> dict:
     output_dir.mkdir(parents=True, exist_ok=True)
+
+    naming = VARIANTS.get(variant)
+    if naming is None:
+        raise SystemExit(f"error: unknown variant {variant!r}")
+    merged_filename = f"{naming.prefix}-merged.bin"
+    app_filename = f"{naming.prefix}-app.bin"
 
     if boot_app0_path is not None and not boot_app0_path.is_file():
         raise SystemExit(f"error: --boot-app0 not found: {boot_app0_path}")
@@ -202,11 +258,11 @@ def build_release(
         loaded.append((name, filename, offset, path, path.read_bytes()))
 
     merged = merge_segments([(offset, data) for _, _, offset, _, data in loaded])
-    merged_path = output_dir / MERGED_FILENAME
+    merged_path = output_dir / merged_filename
     merged_path.write_bytes(merged)
 
     app_data = next(data for name, _, _, _, data in loaded if name == "app")
-    app_path = output_dir / APP_FILENAME
+    app_path = output_dir / app_filename
     app_path.write_bytes(app_data)
 
     segments = [
@@ -229,14 +285,14 @@ def build_release(
         "flashFreq": flash_freq,
         "flashSize": flash_size,
         "merged": {
-            "filename": MERGED_FILENAME,
+            "filename": merged_filename,
             "offset": hex_offset(MERGED_OFFSET),
             "size": len(merged),
             "sha256": sha256_bytes(merged),
         },
         "parts": [
             {
-                "filename": APP_FILENAME,
+                "filename": app_filename,
                 "offset": hex_offset(APP_OFFSET),
                 "size": len(app_data),
                 "sha256": sha256_bytes(app_data),
@@ -244,6 +300,12 @@ def build_release(
         ],
         "segments": segments,
     }
+
+    if naming.key is not None:
+        manifest["variant"] = naming.key
+        manifest["variantLabel"] = naming.label
+    if variant == "station":
+        manifest["filesystems"] = [dict(entry) for entry in STATION_FILESYSTEMS]
 
     # Pin wiring (pins.json) is optional so manifests produced before it existed
     # keep exactly the same shape.
@@ -259,14 +321,14 @@ def build_release(
         "gitCommit": detect_git_commit(),
     }
 
-    manifest_path = output_dir / MANIFEST_FILENAME
+    manifest_path = output_dir / naming.manifest
     manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
     return manifest
 
 
-def verify_release(output_dir: Path) -> dict:
+def verify_release(output_dir: Path, manifest_name: str = MANIFEST_FILENAME) -> dict:
     """Re-read the produced assets and check every hash and offset."""
-    manifest_path = output_dir / MANIFEST_FILENAME
+    manifest_path = output_dir / manifest_name
     if not manifest_path.is_file():
         raise SystemExit(f"error: missing {manifest_path}")
 
@@ -335,6 +397,25 @@ def verify_release(output_dir: Path) -> dict:
                     f"the expected bytes at {segment['offset']}"
                 )
 
+    # A station manifest advertises the LittleFS partition so the flasher can
+    # offer to read /log.csv back; a malformed block would break that offer.
+    if "filesystems" in manifest:
+        filesystems = manifest["filesystems"]
+        if not isinstance(filesystems, list) or not filesystems:
+            problems.append("filesystems: expected a non-empty array")
+        else:
+            for index, entry in enumerate(filesystems):
+                if not isinstance(entry, dict):
+                    problems.append(f"filesystems[{index}]: expected an object")
+                    continue
+                for key in ("type", "offset", "size"):
+                    if key not in entry:
+                        problems.append(f"filesystems[{index}]: missing {key}")
+                try:
+                    int(str(entry.get("offset")), 16)
+                except (TypeError, ValueError):
+                    problems.append(f"filesystems[{index}]: bad offset")
+
     # The pin block is optional, but when it is present it must stay valid and
     # the wiring notes must be displayable strings. Check the key, not the
     # value, so an explicit "pins": null is rejected instead of skipped.
@@ -365,6 +446,7 @@ def verify_release(output_dir: Path) -> dict:
 def print_summary(manifest: dict, output_dir: Path) -> None:
     merged = manifest["merged"]
     print(f"version : {manifest['version']}")
+    print(f"variant : {manifest.get('variantLabel', 'legacy firmware')}")
     print(f"board   : {manifest['board']} ({manifest['chip']})")
     print(
         f"merged  : {merged['filename']} offset={merged['offset']} "
@@ -386,14 +468,21 @@ def print_summary(manifest: dict, output_dir: Path) -> None:
         print(f"pins    : {len(pins)} ({gpios})")
     else:
         print("pins    : none (no pins.json)")
+    for filesystem in manifest.get("filesystems", []):
+        print(
+            f"fs      : {filesystem['type']} {filesystem.get('label', '')} "
+            f"offset={filesystem['offset']} size={filesystem['size']}"
+        )
     print(f"output  : {output_dir}")
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--build-dir", type=Path, default=Path(".pio/build/esp32dev"),
-                        help="PlatformIO build directory (default: .pio/build/esp32dev)")
+    parser.add_argument("--build-dir", type=Path,
+                        default=Path(".pio/build/esp32dev_station"),
+                        help="PlatformIO build directory "
+                             "(default: .pio/build/esp32dev_station)")
     parser.add_argument("--output-dir", type=Path, default=Path("dist"),
                         help="directory for the release assets (default: dist)")
     parser.add_argument("--version", default=None,
@@ -411,6 +500,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                         help="pins.json with the GPIO wiring embedded in the "
                              "manifest (default: the repository's pins.json when "
                              "it exists)")
+    parser.add_argument("--variant", choices=("station", "tester"), default=None,
+                        help="firmware variant: names the assets "
+                             "esp32-devkitc-<variant>-*.bin and adds variant/"
+                             "filesystems blocks to the manifest")
     parser.add_argument("--verify-only", action="store_true",
                         help="only re-verify an existing output directory")
     parser.add_argument("--print-manifest", action="store_true",
@@ -421,8 +514,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
 
+    manifest_name = VARIANTS[args.variant].manifest
+
     if args.verify_only:
-        manifest = verify_release(args.output_dir)
+        manifest = verify_release(args.output_dir, manifest_name)
     else:
         pins_path = args.pins if args.pins is not None else DEFAULT_PINS_PATH
         pin_document = load_pin_document(
@@ -440,8 +535,9 @@ def main(argv: list[str] | None = None) -> int:
             extra_source_dirs=default_boot_app0_dirs(),
             boot_app0_path=args.boot_app0,
             pin_document=pin_document,
+            variant=args.variant,
         )
-        manifest = verify_release(args.output_dir)
+        manifest = verify_release(args.output_dir, manifest_name)
         print_summary(manifest, args.output_dir)
 
     if args.print_manifest:
