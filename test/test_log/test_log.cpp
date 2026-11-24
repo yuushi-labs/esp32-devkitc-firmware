@@ -207,6 +207,43 @@ void test_write_failure_is_reported() {
   TEST_ASSERT_EQUAL_UINT32(0, recorder.recordCount());
 }
 
+void test_header_failure_blocks_data_until_it_is_rewritten() {
+  FakeLogStorage storage;
+  LogRecorder recorder(storage, kIntervals, 3);
+
+  storage.failWrites = true;
+  TEST_ASSERT_TRUE(recorder.begin(0));  // the filesystem is mounted
+  TEST_ASSERT_FALSE(recorder.record(fullSample(), 0));
+  TEST_ASSERT_EQUAL_UINT32(0, recorder.recordCount());
+
+  // Once writes work again the recorder writes the header before the data.
+  storage.failWrites = false;
+  TEST_ASSERT_TRUE(recorder.record(fullSample(), 1000));
+  TEST_ASSERT_EQUAL_UINT32(1, recorder.recordCount());
+  TEST_ASSERT_EQUAL_STRING("uptime_ms,temp_c,pressure_hpa,humidity_pct\n"
+                           "1234,23.46,1006.53,45.0\n",
+                           storage.content.c_str());
+}
+
+void test_a_failed_write_is_not_retried_on_every_loop() {
+  FakeLogStorage storage;
+  LogRecorder recorder(storage, kIntervals, 3);
+  recorder.begin(0);
+  recorder.setEnabled(true);
+
+  storage.failWrites = true;
+  TEST_ASSERT_TRUE(recorder.due(0));
+  TEST_ASSERT_FALSE(recorder.poll(fullSample(), 0));
+  // Wait a full interval before hammering the filesystem again.
+  TEST_ASSERT_FALSE(recorder.due(1000));
+  TEST_ASSERT_FALSE(recorder.due(9999));
+  TEST_ASSERT_TRUE(recorder.due(10000));
+
+  storage.failWrites = false;
+  TEST_ASSERT_TRUE(recorder.poll(fullSample(), 10000));
+  TEST_ASSERT_EQUAL_UINT32(1, recorder.recordCount());
+}
+
 void test_mount_failure_is_reported() {
   FakeLogStorage storage;
   storage.mountOk = false;
@@ -251,6 +288,8 @@ int main(int argc, char** argv) {
   RUN_TEST(test_interval_gating_and_pause);
   RUN_TEST(test_interval_cycles_through_the_table);
   RUN_TEST(test_write_failure_is_reported);
+  RUN_TEST(test_header_failure_blocks_data_until_it_is_rewritten);
+  RUN_TEST(test_a_failed_write_is_not_retried_on_every_loop);
   RUN_TEST(test_mount_failure_is_reported);
   RUN_TEST(test_clear_restarts_the_file);
   return UNITY_END();

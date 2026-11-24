@@ -66,6 +66,35 @@ void test_dht11_frame_decodes_integer_fields() {
   TEST_ASSERT_FLOAT_WITHIN(0.01f, 24.0f, reading.temperatureC);
 }
 
+void test_dht11_negative_temperature_uses_the_sign_bit() {
+  // 35 00 05 80: 35 % RH, -5.0 C (DHT11 sign flag in the decimal byte).
+  uint8_t bytes[5];
+  buildFrame(0x23, 0x00, 0x05, 0x80, bytes);
+  uint32_t pulses[40];
+  buildPulses(bytes, pulses);
+
+  DhtReading reading;
+  TEST_ASSERT_TRUE(fw::decodeDhtFrame(DhtType::kDht11, pulses, 40, &reading));
+  TEST_ASSERT_FLOAT_WITHIN(0.01f, 35.0f, reading.humidityPct);
+  TEST_ASSERT_FLOAT_WITHIN(0.01f, -5.0f, reading.temperatureC);
+
+  // Auto detection does not fall back to the DHT22 reading of the same frame.
+  const DhtFrame frame = fw::decodeDhtFrameAuto(pulses, 40);
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(DhtType::kDht11), static_cast<int>(frame.type));
+  TEST_ASSERT_FLOAT_WITHIN(0.01f, -5.0f, frame.reading.temperatureC);
+}
+
+void test_dht11_accepts_the_datasheet_temperature_range() {
+  DhtReading reading;
+  reading.valid = true;
+  reading.humidityPct = 53.0f;
+  reading.temperatureC = -15.0f;
+  TEST_ASSERT_TRUE(fw::dhtReadingPlausible(DhtType::kDht11, reading));
+
+  reading.temperatureC = -21.0f;
+  TEST_ASSERT_FALSE(fw::dhtReadingPlausible(DhtType::kDht11, reading));
+}
+
 void test_checksum_mismatch_is_rejected() {
   uint8_t bytes[5];
   buildFrame(0x01, 0xC2, 0x00, 0xEA, bytes);
@@ -162,6 +191,8 @@ int main(int argc, char** argv) {
   RUN_TEST(test_dht22_frame_decodes_humidity_and_temperature);
   RUN_TEST(test_dht22_negative_temperature);
   RUN_TEST(test_dht11_frame_decodes_integer_fields);
+  RUN_TEST(test_dht11_negative_temperature_uses_the_sign_bit);
+  RUN_TEST(test_dht11_accepts_the_datasheet_temperature_range);
   RUN_TEST(test_checksum_mismatch_is_rejected);
   RUN_TEST(test_short_frame_is_rejected);
   RUN_TEST(test_out_of_range_humidity_is_rejected);

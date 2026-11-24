@@ -153,9 +153,28 @@ void test_begin_detects_the_sensor_and_configures_it() {
   TEST_ASSERT_EQUAL_STRING("BMP280", sensor.chipName());
   TEST_ASSERT_EQUAL_UINT8(0x58, sensor.chipId());
 
-  // Normal mode with x1 oversampling on both channels.
+  // Normal mode with x1 oversampling on both channels, 500 ms standby.
   TEST_ASSERT_EQUAL_UINT8(0x27, bus.registerValue(0x76, fw::kBmp280CtrlMeasRegister));
-  TEST_ASSERT_EQUAL_UINT8(0x20, bus.registerValue(0x76, fw::kBmp280ConfigRegister));
+  TEST_ASSERT_EQUAL_UINT8(0x80, bus.registerValue(0x76, fw::kBmp280ConfigRegister));
+
+  // Sleep, config, normal: the config write happens while the sensor is idle.
+  size_t ctrlWrites = 0;
+  bool sawSleepBeforeConfig = false;
+  bool sawConfig = false;
+  for (const std::vector<uint8_t>& write : bus.writeLog) {
+    if (write.size() == 2 && write[0] == fw::kBmp280CtrlMeasRegister) {
+      ++ctrlWrites;
+      if (write[1] == 0x00 && !sawConfig) {
+        sawSleepBeforeConfig = true;
+      }
+    }
+    if (write.size() == 2 && write[0] == fw::kBmp280ConfigRegister) {
+      sawConfig = true;
+    }
+  }
+  TEST_ASSERT_TRUE(sawSleepBeforeConfig);
+  TEST_ASSERT_TRUE(sawConfig);
+  TEST_ASSERT_EQUAL_UINT32(2, static_cast<uint32_t>(ctrlWrites));
 }
 
 void test_begin_reports_a_missing_sensor() {
@@ -240,6 +259,15 @@ void test_read_fails_cleanly_without_a_sensor_or_on_a_bus_error() {
   sensor.begin();
   bus.failReads = true;
   TEST_ASSERT_FALSE(sensor.read(&reading));
+  // A lost sensor counts as absent so the caller reinitialises it.
+  TEST_ASSERT_FALSE(sensor.present());
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(Bmp280Status::kBusError),
+                        static_cast<int>(sensor.status()));
+
+  bus.failReads = false;
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(Bmp280Status::kOk),
+                        static_cast<int>(sensor.begin(0x76)));
+  TEST_ASSERT_TRUE(sensor.read(&reading));
 }
 
 void test_find_bmp280_address_prefers_0x76_then_0x77() {

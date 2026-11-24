@@ -158,8 +158,10 @@ void StationApp::pollDht(uint32_t nowMs) {
   size_t bitCount = 0;
   if (!dht_.readFrame(pulses, DhtGpioReader::kFrameBits, &bitCount)) {
     snapshot_.dhtPresent = dht_.responded();
+    // No new frame means no valid humidity, even if the sensor answered: keep
+    // the last value from being shown as current.
+    snapshot_.humidityValid = false;
     if (!snapshot_.dhtPresent) {
-      snapshot_.humidityValid = false;
       snapshot_.dhtType = DhtType::kUnknown;
     }
     dirty_ = true;

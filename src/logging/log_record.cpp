@@ -119,18 +119,23 @@ bool LogRecorder::begin(uint32_t nowMs) {
   }
 
   fileSize_ = storage_.fileSize();
-  if (fileSize_ == 0) {
-    char header[64];
-    const size_t needed = formatLogHeader(header, sizeof(header));
-    if (needed < sizeof(header)) {
-      lastWriteOk_ = appendLine(header);
-    }
-  }
+  // An existing file is assumed to start with the header; a new one gets it
+  // written before any data row is allowed.
+  headerReady_ = fileSize_ > 0 ? true : writeHeader();
   recordCount_ = storage_.countDataLines();
   fileSize_ = storage_.fileSize();
-  lastRecordMs_ = nowMs;
-  hasRecorded_ = false;
+  lastAttemptMs_ = nowMs;
+  hasAttempted_ = false;
   return true;
+}
+
+bool LogRecorder::writeHeader() {
+  char header[64];
+  const size_t needed = formatLogHeader(header, sizeof(header));
+  if (needed >= sizeof(header)) {
+    return false;
+  }
+  return appendLine(header);
 }
 
 bool LogRecorder::toggleEnabled() {
@@ -157,20 +162,20 @@ bool LogRecorder::due(uint32_t nowMs) const {
   if (!enabled_) {
     return false;
   }
-  if (!hasRecorded_) {
+  if (!hasAttempted_) {
     return true;
   }
-  return (nowMs - lastRecordMs_) >= intervalMs();
+  return (nowMs - lastAttemptMs_) >= intervalMs();
 }
 
 uint32_t LogRecorder::intervalRemainingMs(uint32_t nowMs) const {
   if (!enabled_) {
     return 0;
   }
-  if (!hasRecorded_) {
+  if (!hasAttempted_) {
     return 0;
   }
-  const uint32_t elapsed = nowMs - lastRecordMs_;
+  const uint32_t elapsed = nowMs - lastAttemptMs_;
   const uint32_t interval = intervalMs();
   return elapsed >= interval ? 0 : interval - elapsed;
 }
@@ -188,6 +193,14 @@ bool LogRecorder::appendLine(const char* line) {
 }
 
 bool LogRecorder::record(const LogSample& sample, uint32_t nowMs) {
+  hasAttempted_ = true;
+  lastAttemptMs_ = nowMs;
+
+  if (!headerReady_ && !writeHeader()) {
+    lastWriteOk_ = false;
+    return false;
+  }
+
   char line[96];
   const size_t needed = formatLogLine(sample, line, sizeof(line));
   if (needed >= sizeof(line)) {
@@ -198,8 +211,6 @@ bool LogRecorder::record(const LogSample& sample, uint32_t nowMs) {
     return false;
   }
   ++recordCount_;
-  lastRecordMs_ = nowMs;
-  hasRecorded_ = true;
   return true;
 }
 
@@ -220,13 +231,11 @@ bool LogRecorder::clear(uint32_t nowMs) {
     return false;
   }
   fileSize_ = 0;
-  char header[64];
-  const size_t needed = formatLogHeader(header, sizeof(header));
-  lastWriteOk_ = needed < sizeof(header) && appendLine(header);
+  headerReady_ = writeHeader();
   recordCount_ = 0;
-  hasRecorded_ = false;
-  lastRecordMs_ = nowMs;
-  return lastWriteOk_;
+  hasAttempted_ = false;
+  lastAttemptMs_ = nowMs;
+  return headerReady_;
 }
 
 }  // namespace fw

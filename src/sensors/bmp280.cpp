@@ -7,9 +7,12 @@ namespace {
 
 // osrs_t = x1, osrs_p = x1, mode = normal (datasheet 4.3.4 / 4.3.3).
 constexpr uint8_t kCtrlMeasNormal = 0x27;
-// t_standby = 500 ms, IIR filter off, 4 wire SPI off (only the first two bits
-// matter for I2C).
-constexpr uint8_t kConfigStandby500ms = 0x20;
+// t_sb = 100 (500 ms), IIR filter off, 4 wire SPI off. Only the first two bits
+// matter for I2C.
+constexpr uint8_t kConfigStandby500ms = 0x80;
+
+// Mode bits (ctrl_meas[1:0]) - sleep before a config write, normal afterwards.
+constexpr uint8_t kCtrlMeasSleep = 0x00;
 
 // Both sensors report 0x80000 until the first conversion finished.
 constexpr int32_t kNoMeasurementMarker = 0x80000;
@@ -115,10 +118,12 @@ uint32_t bmp280CompensatePressureQ24(int32_t adcPressure,
                                     int32_t temperatureFine) {
   int64_t var1 = static_cast<int64_t>(temperatureFine) - 128000;
   int64_t var2 = var1 * var1 * static_cast<int64_t>(calibration.p6);
-  var2 += (var1 * static_cast<int64_t>(calibration.p5)) << 17;
-  var2 += static_cast<int64_t>(calibration.p4) << 35;
+  // Multiplication instead of left shifts: var1 and the calibration terms can
+  // be negative, and shifting a negative value is undefined behaviour.
+  var2 += var1 * static_cast<int64_t>(calibration.p5) * 131072;  // x << 17
+  var2 += static_cast<int64_t>(calibration.p4) * 34359738368LL;  // x << 35
   var1 = ((var1 * var1 * static_cast<int64_t>(calibration.p3)) >> 8) +
-         ((var1 * static_cast<int64_t>(calibration.p2)) << 12);
+         var1 * static_cast<int64_t>(calibration.p2) * 4096;  // x << 12
   var1 = ((static_cast<int64_t>(1) << 47) + var1) *
              static_cast<int64_t>(calibration.p1) >>
          33;
@@ -127,11 +132,11 @@ uint32_t bmp280CompensatePressureQ24(int32_t adcPressure,
   }
 
   int64_t pressure = 1048576 - static_cast<int64_t>(adcPressure);
-  pressure = (((pressure << 31) - var2) * 3125) / var1;
+  pressure = ((pressure * 2147483648LL - var2) * 3125) / var1;  // x << 31
   var1 = (static_cast<int64_t>(calibration.p9) * (pressure >> 13) * (pressure >> 13)) >> 25;
   var2 = (static_cast<int64_t>(calibration.p8) * pressure) >> 19;
   pressure = ((pressure + var1 + var2) >> 8) +
-             (static_cast<int64_t>(calibration.p7) << 4);
+             static_cast<int64_t>(calibration.p7) * 16;  // x << 4
 
   if (pressure <= 0) {
     return 0;
@@ -178,8 +183,17 @@ Bmp280Status Bmp280::begin() {
     return status_;
   }
 
-  if (!writeRegister(bus_, address_, kBmp280CtrlMeasRegister, kCtrlMeasNormal) ||
-      !writeRegister(bus_, address_, kBmp280ConfigRegister, kConfigStandby500ms)) {
+  // The sensor ignores config writes while a conversion is running, so go to
+  // sleep first (config is accepted there), then start normal mode.
+  if (!writeRegister(bus_, address_, kBmp280CtrlMeasRegister, kCtrlMeasSleep)) {
+    status_ = Bmp280Status::kBusError;
+    return status_;
+  }
+  if (!writeRegister(bus_, address_, kBmp280ConfigRegister, kConfigStandby500ms)) {
+    status_ = Bmp280Status::kBusError;
+    return status_;
+  }
+  if (!writeRegister(bus_, address_, kBmp280CtrlMeasRegister, kCtrlMeasNormal)) {
     status_ = Bmp280Status::kBusError;
     return status_;
   }
@@ -203,6 +217,9 @@ bool Bmp280::read(Bmp280Reading* out) {
 
   uint8_t data[6] = {0};
   if (!readRegisters(bus_, address_, kBmp280DataRegister, data, sizeof(data))) {
+    // Treat a lost sensor as absent so the caller can reinitialise it instead
+    // of polling a dead bus forever.
+    status_ = Bmp280Status::kBusError;
     return false;
   }
 

@@ -55,7 +55,7 @@ bool dhtReadingPlausible(DhtType type, const DhtReading& reading) {
     return false;
   }
   if (type == DhtType::kDht11) {
-    return reading.temperatureC >= -10.0f && reading.temperatureC <= 60.0f;
+    return reading.temperatureC >= -20.0f && reading.temperatureC <= 60.0f;
   }
   if (type == DhtType::kDht22) {
     return reading.temperatureC >= -40.0f && reading.temperatureC <= 85.0f;
@@ -79,12 +79,16 @@ bool decodeDhtFrame(DhtType type, const uint32_t* highMicros, size_t bitCount,
 
   DhtReading reading;
   if (type == DhtType::kDht11) {
-    // 8 bit humidity, 8 bit temperature, decimal bytes are usually zero: the
-    // integer bytes are the whole value.
+    // 8 bit humidity, 8 bit temperature and their decimal bytes. The MSB of the
+    // temperature decimal byte is the sign flag (DHT11 datasheet 5.3).
     reading.humidityPct = static_cast<float>(frame.bytes[0]) +
                           static_cast<float>(frame.bytes[1]) / 10.0f;
-    reading.temperatureC = static_cast<float>(frame.bytes[2]) +
-                           static_cast<float>(frame.bytes[3]) / 10.0f;
+    const bool negative = (frame.bytes[3] & 0x80u) != 0;
+    const uint8_t temperatureFraction =
+        static_cast<uint8_t>(frame.bytes[3] & 0x7Fu);
+    const float magnitude = static_cast<float>(frame.bytes[2]) +
+                            static_cast<float>(temperatureFraction) / 10.0f;
+    reading.temperatureC = negative ? -magnitude : magnitude;
   } else {
     const uint16_t humidityRaw =
         static_cast<uint16_t>((frame.bytes[0] << 8) | frame.bytes[1]);

@@ -68,7 +68,8 @@ class LogRecorder {
   uint32_t intervalMs() const;
   void nextInterval();
 
-  // True when a new sample is due at `nowMs` (enabled and one interval passed).
+  // True when a new sample is due at `nowMs` (enabled and one interval passed
+  // since the last attempt, so a failing write is not retried on every loop).
   bool due(uint32_t nowMs) const;
   uint32_t intervalRemainingMs(uint32_t nowMs) const;
 
@@ -86,17 +87,19 @@ class LogRecorder {
 
  private:
   bool appendLine(const char* line);
+  bool writeHeader();
 
   LogStorage& storage_;
   const uint32_t* intervals_;
   size_t intervalCount_;
   size_t intervalIndex_ = 0;
   bool storageReady_ = false;
+  bool headerReady_ = false;
   bool enabled_ = true;
   bool lastWriteOk_ = false;
-  bool hasRecorded_ = false;
+  bool hasAttempted_ = false;
   uint32_t recordCount_ = 0;
-  uint32_t lastRecordMs_ = 0;
+  uint32_t lastAttemptMs_ = 0;
   uint32_t fileSize_ = 0;
 };
 

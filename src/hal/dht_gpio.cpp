@@ -7,8 +7,21 @@ namespace {
 // DHT22 happy as well.
 constexpr uint32_t kStartSignalMs = 20;
 // Response pulse (80 us low, 80 us high) and the longest bit pulse (~70 us).
-constexpr uint32_t kResponseTimeoutUs = 250;
+constexpr uint32_t kResponseTimeoutUs = 300;
 constexpr uint32_t kBitTimeoutUs = 150;
+
+// PulseIn() first waits for a pulse that is already in progress to end, which
+// would silently skip the response high and the first data bit. Poll the pin
+// against micros() instead so every edge is seen exactly once.
+bool waitForLevel(uint8_t pin, uint8_t level, uint32_t timeoutUs) {
+  const uint32_t start = micros();
+  while (digitalRead(pin) != level) {
+    if ((micros() - start) >= timeoutUs) {
+      return false;
+    }
+  }
+  return true;
+}
 
 }  // namespace
 
@@ -30,22 +43,24 @@ bool DhtGpioReader::readFrame(uint32_t* highMicros, size_t capacity,
   delay(kStartSignalMs);
   pinMode(pin_, INPUT_PULLUP);
 
-  // The sensor pulls the line low for ~80 us and then high for ~80 us.
-  const uint32_t responseLow = pulseIn(pin_, LOW, kResponseTimeoutUs);
-  const uint32_t responseHigh = pulseIn(pin_, HIGH, kResponseTimeoutUs);
-  if (responseLow == 0 || responseHigh == 0) {
+  // The sensor pulls the line low for ~80 us and then high for ~80 us; after
+  // that the 40 data bits follow, each starting with a high pulse.
+  if (!waitForLevel(pin_, LOW, kResponseTimeoutUs) ||
+      !waitForLevel(pin_, HIGH, kResponseTimeoutUs) ||
+      !waitForLevel(pin_, LOW, kResponseTimeoutUs)) {
     return false;
   }
   responded_ = true;
 
   for (size_t bit = 0; bit < kFrameBits; ++bit) {
-    const uint32_t high = pulseIn(pin_, HIGH, kBitTimeoutUs);
-    if (high == 0) {
+    if (!waitForLevel(pin_, HIGH, kBitTimeoutUs)) {
       return false;
     }
-    highMicros[bit] = high;
-    // Skip the following low period before the next bit's high pulse.
-    (void)pulseIn(pin_, LOW, kBitTimeoutUs);
+    const uint32_t start = micros();
+    if (!waitForLevel(pin_, LOW, kBitTimeoutUs)) {
+      return false;
+    }
+    highMicros[bit] = micros() - start;
   }
 
   *bitCount = kFrameBits;

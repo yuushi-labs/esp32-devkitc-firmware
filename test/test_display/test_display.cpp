@@ -155,6 +155,35 @@ void test_page_lines_stack_and_truncate() {
   TEST_ASSERT_EQUAL_UINT8(2, page.lines[0].scale);
 }
 
+void test_page_lines_keep_the_degree_sign_whole() {
+  PageLines page;
+  // 7 cells, 8 bytes: at scale 2 (10 cells) the whole string must survive.
+  page.add("23.4 \xC2\xB0" "C", 2);
+  TEST_ASSERT_EQUAL_STRING("23.4 \xC2\xB0" "C", page.lines[0].text);
+
+  // 19 digits + degree + C is exactly 21 cells and must stay whole.
+  PageLines narrow;
+  narrow.add("1234567890123456789\xC2\xB0" "C");
+  TEST_ASSERT_EQUAL_STRING("1234567890123456789\xC2\xB0" "C", narrow.lines[0].text);
+
+  // 22 cells: the degree sign stays whole, the trailing "C" is dropped.
+  narrow.clear();
+  narrow.add("12345678901234567890\xC2\xB0" "C");
+  TEST_ASSERT_EQUAL_STRING("12345678901234567890\xC2\xB0", narrow.lines[0].text);
+}
+
+void test_draw_page_lines_clears_the_previous_page() {
+  Framebuffer framebuffer;
+  PageLines page;
+  page.add("WWWWWWWWWW");
+  fw::drawPageLines(framebuffer, page);
+  TEST_ASSERT_TRUE(framebuffer.pixel(2, 0));
+
+  PageLines empty;
+  fw::drawPageLines(framebuffer, empty);
+  TEST_ASSERT_FALSE(framebuffer.pixel(2, 0));
+}
+
 void test_draw_page_lines_places_each_line() {
   PageLines page;
   page.add("A");
@@ -281,6 +310,8 @@ int main(int argc, char** argv) {
   RUN_TEST(test_text_is_clipped_at_the_right_edge);
   RUN_TEST(test_fit_chars_for_the_panel_width);
   RUN_TEST(test_page_lines_stack_and_truncate);
+  RUN_TEST(test_page_lines_keep_the_degree_sign_whole);
+  RUN_TEST(test_draw_page_lines_clears_the_previous_page);
   RUN_TEST(test_draw_page_lines_places_each_line);
   RUN_TEST(test_draw_page_lines_stops_at_the_bottom);
   RUN_TEST(test_display_sends_the_init_sequence);

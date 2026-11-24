@@ -2,13 +2,17 @@
 
 namespace fw {
 
-void WireI2cTransport::begin(int sdaPin, int sclPin, uint32_t clockHz) {
-  wire_.begin(sdaPin, sclPin, clockHz);
+bool WireI2cTransport::begin(int sdaPin, int sclPin, uint32_t clockHz) {
+  ready_ = wire_.begin(sdaPin, sclPin, clockHz);
+  if (!ready_) {
+    return false;
+  }
   wire_.setTimeOut(50);  // milliseconds; keeps a missing device from blocking
+  return true;
 }
 
 bool WireI2cTransport::write(uint8_t address, const uint8_t* data, size_t length) {
-  if (data == nullptr || length == 0) {
+  if (!ready_ || data == nullptr || length == 0) {
     return false;
   }
   wire_.beginTransmission(address);
@@ -19,7 +23,7 @@ bool WireI2cTransport::write(uint8_t address, const uint8_t* data, size_t length
 bool WireI2cTransport::writeRead(uint8_t address, const uint8_t* writeData,
                                  size_t writeLength, uint8_t* readData,
                                  size_t readLength) {
-  if (writeData == nullptr || writeLength == 0 || readData == nullptr ||
+  if (!ready_ || writeData == nullptr || writeLength == 0 || readData == nullptr ||
       readLength == 0) {
     return false;
   }
@@ -49,6 +53,9 @@ bool WireI2cTransport::writeRead(uint8_t address, const uint8_t* writeData,
 }
 
 bool WireI2cTransport::probe(uint8_t address) {
+  if (!ready_) {
+    return false;
+  }
   wire_.beginTransmission(address);
   return wire_.endTransmission() == 0;
 }

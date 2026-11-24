@@ -195,7 +195,8 @@ def resolve_source(
     searched = "\n  ".join(str(path) for path in candidates)
     raise SystemExit(
         f"error: missing {filename}; looked in:\n  {searched}\n"
-        "Build the firmware first with 'pio run -e esp32dev'."
+        "Build the firmware first with 'pio run -e esp32dev_station' "
+        "(or the environment matching --build-dir)."
     )
 
 

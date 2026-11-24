@@ -15,7 +15,10 @@ class WireI2cTransport : public I2cTransport {
  public:
   explicit WireI2cTransport(TwoWire& wire = Wire) : wire_(wire) {}
 
-  void begin(int sdaPin, int sclPin, uint32_t clockHz);
+  // False when Wire could not allocate its buffers; every transfer is then
+  // refused instead of blocking on a mutex that was never released.
+  bool begin(int sdaPin, int sclPin, uint32_t clockHz);
+  bool ready() const { return ready_; }
 
   bool write(uint8_t address, const uint8_t* data, size_t length) override;
   bool writeRead(uint8_t address, const uint8_t* writeData, size_t writeLength,
@@ -24,6 +27,7 @@ class WireI2cTransport : public I2cTransport {
 
  private:
   TwoWire& wire_;
+  bool ready_ = false;
 };
 
 }  // namespace fw

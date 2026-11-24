@@ -190,6 +190,9 @@ python scripts/build_release_bins.py \
 - PR / `main` push: `pio test -e native` → Python テスト → station と tester の両方をビルド → 結合バイナリ生成と検証 → アーティファクト保存
 - タグ `v*` push、または `workflow_dispatch`（`publish: true`）: 6 アセットを添付した GitHub Release を作成（既存 Release にはアップロード）
 
+> **ワークフローを変更するときの注意**
+> GitHub App の権限では `.github/workflows/` への push が 403 で拒否されます。ワークフローを変えるときは `docs/ci/release-firmware.yml` を更新し、その内容をブラウザ（`@yuushi2024` のセッション）で `.github/workflows/release-firmware.yml` へ反映してください。v0.2.0 の 2 バリアント対応もこの手順で反映済みです（反映前のタグビルドは v0.1.x の単一ファームウェアのままでした）。
+
 `env:esp32dev` は v0.1.x のワークフローが使っていた後方互換エイリアス（station と同じ設定）で、v0.3.0 で削除予定です。
 
 ### 結合バイナリのレイアウト

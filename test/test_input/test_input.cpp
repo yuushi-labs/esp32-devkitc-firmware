@@ -130,6 +130,19 @@ void test_long_press_fires_once() {
   TEST_ASSERT_FALSE(button.longPressFired());
 }
 
+void test_a_delayed_press_confirmation_does_not_swallow_the_long_press() {
+  DebouncedButton button(25, 900);
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(ButtonEvent::kNone),
+                        static_cast<int>(button.update(true, 0)));
+  // The press is confirmed only now, well past the long press threshold.
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(ButtonEvent::kPress),
+                        static_cast<int>(button.update(true, 1000)));
+  TEST_ASSERT_FALSE(button.longPressFired());
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(ButtonEvent::kLongPress),
+                        static_cast<int>(button.update(true, 1100)));
+  TEST_ASSERT_TRUE(button.longPressFired());
+}
+
 void test_held_time_and_event_names() {
   DebouncedButton button(25, 900);
   TEST_ASSERT_EQUAL_UINT32(0, button.heldMs(1234));
@@ -169,6 +182,7 @@ int main(int argc, char** argv) {
   RUN_TEST(test_button_reports_press_and_release_after_debounce);
   RUN_TEST(test_button_ignores_contact_bounce);
   RUN_TEST(test_long_press_fires_once);
+  RUN_TEST(test_a_delayed_press_confirmation_does_not_swallow_the_long_press);
   RUN_TEST(test_held_time_and_event_names);
   RUN_TEST(test_reset_restores_the_initial_state);
   return UNITY_END();

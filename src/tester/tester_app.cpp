@@ -49,7 +49,6 @@ void TesterApp::begin() {
   refreshInputs();
 
   lastDisplayMs_ = millis();
-  lastEchoMs_ = millis();
   redraw();
 
   Serial.println("tester ready: everything you move is echoed here");

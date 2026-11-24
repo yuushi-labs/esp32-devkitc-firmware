@@ -57,7 +57,6 @@ class TesterApp {
   uint32_t lastSensorPollMs_ = 0;
   uint32_t lastDhtPollMs_ = 0;
   uint32_t lastDisplayMs_ = 0;
-  uint32_t lastEchoMs_ = 0;
 };
 
 }  // namespace fw

@@ -3,13 +3,14 @@
 // Adafruit GFX. Each glyph is five column bytes; bit 0 is the top row.
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 
 namespace fw {
 
 constexpr uint8_t kFontFirstChar = 0x20;
 constexpr uint8_t kFontLastChar = 0x7E;
-constexpr size_t kFontGlyphCount = kFontLastChar - kFontFirstChar + 1;
+constexpr std::size_t kFontGlyphCount = kFontLastChar - kFontFirstChar + 1;
 constexpr uint8_t kFontWidth = 5;
 constexpr uint8_t kFontHeight = 7;
 

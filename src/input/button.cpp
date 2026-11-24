@@ -47,10 +47,12 @@ ButtonEvent DebouncedButton::update(bool rawPressed, uint32_t nowMs) {
 
   if (pressed_ && !longPressFired_ &&
       (nowMs - pressedAtMs_) >= longPressMs_) {
-    longPressFired_ = true;
     // A long press is reported after the press it belongs to; keep a release
-    // that happened in the same call from being swallowed.
+    // that happened in the same call from being swallowed, and only mark it as
+    // reported once it is actually reported (a delayed press confirmation must
+    // not swallow the long press).
     if (event == ButtonEvent::kNone) {
+      longPressFired_ = true;
       event = ButtonEvent::kLongPress;
     }
   }
