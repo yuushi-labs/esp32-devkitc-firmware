@@ -279,7 +279,7 @@ class VariantReleaseTest(unittest.TestCase):
             self.assertEqual(manifest["parts"][0]["filename"],
                              "esp32-devkitc-station-app.bin")
             self.assertTrue((output_dir / "flash-manifest.json").is_file())
-            self.assertFalse((output_dir / "flash-manifest-tester.json").exists())
+            self.assertFalse((output_dir / "tester-flash-manifest.json").exists())
 
             filesystem = manifest["filesystems"][0]
             self.assertEqual(filesystem["type"], "littlefs")
@@ -298,10 +298,10 @@ class VariantReleaseTest(unittest.TestCase):
             self.assertNotIn("filesystems", manifest)
             self.assertEqual(manifest["merged"]["filename"],
                              "esp32-devkitc-tester-merged.bin")
-            self.assertTrue((output_dir / "flash-manifest-tester.json").is_file())
+            self.assertTrue((output_dir / "tester-flash-manifest.json").is_file())
             self.assertFalse((output_dir / "flash-manifest.json").exists())
 
-            build.verify_release(output_dir, "flash-manifest-tester.json")
+            build.verify_release(output_dir, "tester-flash-manifest.json")
 
     def test_legacy_names_without_a_variant_are_unchanged(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -331,7 +331,7 @@ class VariantReleaseTest(unittest.TestCase):
                 "--variant", "tester",
             ])
             self.assertEqual(exit_code, 0)
-            self.assertTrue((output_dir / "flash-manifest-tester.json").is_file())
+            self.assertTrue((output_dir / "tester-flash-manifest.json").is_file())
             self.assertTrue((output_dir / "esp32-devkitc-tester-merged.bin").is_file())
 
     def test_verify_rejects_a_broken_filesystem_block(self):
@@ -348,7 +348,7 @@ class VariantReleaseTest(unittest.TestCase):
     def test_verify_rejects_a_missing_manifest(self):
         with tempfile.TemporaryDirectory() as tmp:
             with self.assertRaises(SystemExit):
-                build.verify_release(Path(tmp) / "dist", "flash-manifest-tester.json")
+                build.verify_release(Path(tmp) / "dist", "tester-flash-manifest.json")
 
 
 if __name__ == "__main__":
