@@ -109,7 +109,11 @@ WifiValidation makeWifiCredentials(const char* ssid, const char* password,
   return WifiValidation::kOk;
 }
 
-size_t urlDecode(const char* input, size_t length, char* out, size_t outSize) {
+size_t urlDecode(const char* input, size_t length, char* out, size_t outSize,
+                 bool* truncated) {
+  if (truncated != nullptr) {
+    *truncated = false;
+  }
   if (input == nullptr || out == nullptr || outSize == 0) {
     return 0;
   }
@@ -126,6 +130,8 @@ size_t urlDecode(const char* input, size_t length, char* out, size_t outSize) {
     }
     if (written + 1 < outSize) {
       out[written++] = c;
+    } else if (truncated != nullptr) {
+      *truncated = true;
     }
   }
   out[written] = '\0';
@@ -147,11 +153,26 @@ bool parseWifiSetupForm(const char* body, WifiCredentials* out,
     return false;
   }
   char ssid[kWifiSsidMaxLength + 1] = {0};
-  urlDecode(value, valueLength, ssid, sizeof(ssid));
+  bool ssidTruncated = false;
+  urlDecode(value, valueLength, ssid, sizeof(ssid), &ssidTruncated);
+  if (ssidTruncated) {
+    // A shortened SSID would silently save a different network.
+    if (error != nullptr) {
+      *error = WifiValidation::kSsidTooLong;
+    }
+    return false;
+  }
 
   char password[kWifiPasswordMaxLength + 1] = {0};
   if (findField(body, "password", &value, &valueLength)) {
-    urlDecode(value, valueLength, password, sizeof(password));
+    bool passwordTruncated = false;
+    urlDecode(value, valueLength, password, sizeof(password), &passwordTruncated);
+    if (passwordTruncated) {
+      if (error != nullptr) {
+        *error = WifiValidation::kPasswordTooLong;
+      }
+      return false;
+    }
   }
 
   const WifiValidation validation = makeWifiCredentials(ssid, password, out);

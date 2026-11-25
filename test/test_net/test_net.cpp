@@ -61,6 +61,15 @@ void test_url_decode_handles_plus_and_percent() {
   TEST_ASSERT_EQUAL_STRING("p@ss word", out);
   urlDecode("bad%zz", 6, out, sizeof(out));
   TEST_ASSERT_EQUAL_STRING("bad%zz", out);
+
+  // A value that does not fit is reported instead of being silently shortened.
+  char small[5];
+  bool truncated = false;
+  urlDecode("abcdefgh", 8, small, sizeof(small), &truncated);
+  TEST_ASSERT_TRUE(truncated);
+  TEST_ASSERT_EQUAL_STRING("abcd", small);
+  urlDecode("abc", 3, small, sizeof(small), &truncated);
+  TEST_ASSERT_FALSE(truncated);
 }
 
 void test_setup_form_parses() {
@@ -83,6 +92,28 @@ void test_setup_form_parses() {
   TEST_ASSERT_EQUAL_INT(static_cast<int>(WifiValidation::kPasswordTooShort),
                         static_cast<int>(error));
   TEST_ASSERT_FALSE(parseWifiSetupForm(nullptr, &credentials, &error));
+}
+
+void test_setup_form_rejects_values_that_do_not_fit() {
+  WifiCredentials credentials;
+  WifiValidation error = WifiValidation::kOk;
+  // 33 characters: one over the 32 character SSID limit.
+  TEST_ASSERT_FALSE(parseWifiSetupForm(
+      "ssid=123456789012345678901234567890123", &credentials, &error));
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(WifiValidation::kSsidTooLong),
+                        static_cast<int>(error));
+
+  // 64 characters: one over the 63 character password limit.
+  TEST_ASSERT_FALSE(parseWifiSetupForm(
+      "ssid=Home&password=1234567890123456789012345678901234567890123456789012345678901234",
+      &credentials, &error));
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(WifiValidation::kPasswordTooLong),
+                        static_cast<int>(error));
+
+  // Exactly at the limits is still accepted.
+  TEST_ASSERT_TRUE(parseWifiSetupForm(
+      "ssid=12345678901234567890123456789012&password=12345678", &credentials,
+      &error));
 }
 
 void test_wifi_status_report_formats_local_time() {
@@ -333,7 +364,8 @@ void test_dashboard_html_is_self_contained() {
 void test_setup_page_lists_and_escapes_networks() {
   const char* ssids[] = {"Home", "<script>"};
   char out[4096];
-  const size_t needed = formatSetupPage(ssids, 2, "wrong password", out, sizeof(out));
+  const size_t needed =
+      formatSetupPage(ssids, 2, "wrong password", "abc123", out, sizeof(out));
   TEST_ASSERT_TRUE(needed < sizeof(out));
   TEST_ASSERT_NOT_NULL(std::strstr(out, "action=\"/save\""));
   TEST_ASSERT_NOT_NULL(std::strstr(out, "Nearby networks"));
@@ -342,12 +374,26 @@ void test_setup_page_lists_and_escapes_networks() {
   TEST_ASSERT_NULL(std::strstr(out, "<script>"));
   TEST_ASSERT_NOT_NULL(std::strstr(out, "wrong password"));
   TEST_ASSERT_NOT_NULL(std::strstr(out, "name=\"password\""));
+  // The form carries the short lived token POST /save has to echo back.
+  TEST_ASSERT_NOT_NULL(std::strstr(out, "name=\"token\" value=\"abc123\""));
+  // With results the page must not reload itself.
+  TEST_ASSERT_NULL(std::strstr(out, "http-equiv=\"refresh\""));
 }
 
-void test_setup_page_without_networks() {
+void test_setup_page_reloads_while_the_scan_is_empty() {
   char out[4096];
-  formatSetupPage(nullptr, 0, "", out, sizeof(out));
+  formatSetupPage(nullptr, 0, "", "tok", out, sizeof(out));
   TEST_ASSERT_NOT_NULL(std::strstr(out, "no networks found yet"));
+  TEST_ASSERT_NOT_NULL(std::strstr(out, "http-equiv=\"refresh\""));
+}
+
+void test_setup_locked_page_explains_the_device_path() {
+  char out[2048];
+  const size_t needed = formatSetupLockedPage(out, sizeof(out));
+  TEST_ASSERT_TRUE(needed < sizeof(out));
+  TEST_ASSERT_NOT_NULL(std::strstr(out, "locked"));
+  TEST_ASSERT_NOT_NULL(std::strstr(out, "ESP32-Station-AP"));
+  TEST_ASSERT_NOT_NULL(std::strstr(out, "wifi ap"));
 }
 
 void test_saved_page_escapes_the_ssid() {
@@ -367,6 +413,7 @@ int main(int argc, char** argv) {
   RUN_TEST(test_credentials_copy_only_when_valid);
   RUN_TEST(test_url_decode_handles_plus_and_percent);
   RUN_TEST(test_setup_form_parses);
+  RUN_TEST(test_setup_form_rejects_values_that_do_not_fit);
   RUN_TEST(test_wifi_status_report_formats_local_time);
   RUN_TEST(test_station_url);
   RUN_TEST(test_civil_time_conversion);
@@ -379,7 +426,8 @@ int main(int argc, char** argv) {
   RUN_TEST(test_logs_json_from_csv_keeps_the_newest_rows);
   RUN_TEST(test_dashboard_html_is_self_contained);
   RUN_TEST(test_setup_page_lists_and_escapes_networks);
-  RUN_TEST(test_setup_page_without_networks);
+  RUN_TEST(test_setup_page_reloads_while_the_scan_is_empty);
+  RUN_TEST(test_setup_locked_page_explains_the_device_path);
   RUN_TEST(test_saved_page_escapes_the_ssid);
   return UNITY_END();
 }

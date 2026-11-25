@@ -1,6 +1,7 @@
 #include "hal/web_server.h"
 
 #include <LittleFS.h>
+#include <esp_random.h>
 
 #include <cstring>
 #include <memory>
@@ -151,12 +152,39 @@ void StationWebServer::handleQr() {
   server_.send(200, "application/json", "{\"ok\":true}");
 }
 
+void StationWebServer::issueSetupToken(uint32_t nowMs) {
+  // Two 32 bit random values: unique per page, unguessable from the network, and
+  // cheap to regenerate every time the form is served.
+  std::snprintf(setupToken_, sizeof(setupToken_), "%08lx%08lx",
+                static_cast<unsigned long>(esp_random()),
+                static_cast<unsigned long>(esp_random()));
+  setupTokenIssuedMs_ = nowMs;
+}
+
+bool StationWebServer::setupRequestAuthorised() const {
+  if (wifi_ == nullptr || !wifi_->apActive()) {
+    // Changing the saved network needs someone at the device (or on the setup
+    // AP); a client of the station's own LAN cannot rewrite it.
+    return false;
+  }
+  if (setupToken_[0] == '\0') {
+    return false;
+  }
+  if ((millis() - setupTokenIssuedMs_) > kSetupSessionMs) {
+    return false;
+  }
+  return true;
+}
+
 String StationWebServer::buildSetupPage(const char* message) {
   static char ssids[kMaxScannedSsids][kWifiSsidMaxLength + 1];
-  const char* pointers[kMaxScannedSsids] = {nullptr};
+  char* pointers[kMaxScannedSsids] = {nullptr};
   size_t count = 0;
   if (wifi_ != nullptr) {
-    count = wifi_->scanNetworks(ssids, kMaxScannedSsids);
+    // The scan runs in the background so the page is answered immediately; the
+    // page reloads itself while the list is still empty.
+    wifi_->requestScan(millis());
+    count = wifi_->cachedNetworks(ssids, kMaxScannedSsids);
   }
   for (size_t index = 0; index < count; ++index) {
     pointers[index] = ssids[index];
@@ -166,8 +194,8 @@ String StationWebServer::buildSetupPage(const char* message) {
   if (!buffer) {
     return String("<html><body>out of memory</body></html>");
   }
-  const size_t needed =
-      formatSetupPage(pointers, count, message, buffer.get(), kSetupBufferSize);
+  const size_t needed = formatSetupPage(pointers, count, message, setupToken_,
+                                        buffer.get(), kSetupBufferSize);
   if (needed >= kSetupBufferSize) {
     return String("<html><body>setup page too large</body></html>");
   }
@@ -175,10 +203,34 @@ String StationWebServer::buildSetupPage(const char* message) {
 }
 
 void StationWebServer::handleSetup() {
+  if (!setupRequestAuthorised()) {
+    std::unique_ptr<char[]> buffer(new (std::nothrow) char[2048]);
+    if (!buffer) {
+      server_.send(403, "text/plain", "connect to the setup access point first");
+      return;
+    }
+    const size_t needed = formatSetupLockedPage(buffer.get(), 2048);
+    if (needed >= 2048) {
+      server_.send(403, "text/plain", "connect to the setup access point first");
+      return;
+    }
+    server_.send(403, "text/html", buffer.get());
+    return;
+  }
+  issueSetupToken(millis());
   server_.send(200, "text/html", buildSetupPage(""));
 }
 
 void StationWebServer::handleSave() {
+  if (!setupRequestAuthorised() ||
+      !server_.hasArg("token") ||
+      server_.arg("token") != String(setupToken_)) {
+    // Anything that did not come from the form this server just handed out (and
+    // is not on the setup AP) is refused before it touches the credentials.
+    server_.send(403, "text/plain", "authorisation required");
+    return;
+  }
+
   WifiCredentials credentials;
   WifiValidation error = WifiValidation::kEmptySsid;
   bool accepted = false;

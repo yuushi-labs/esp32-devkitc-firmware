@@ -45,8 +45,11 @@ bool parseWifiSetupForm(const char* body, WifiCredentials* out,
                         WifiValidation* error);
 
 // Percent-decodes `length` bytes into `out` (NUL terminated). Returns the
-// number of characters written, excluding the terminator.
-size_t urlDecode(const char* input, size_t length, char* out, size_t outSize);
+// number of characters written, excluding the terminator. `truncated` (when
+// given) is set when the decoded value did not fit, so the caller can reject
+// the input instead of saving a silently shortened value.
+size_t urlDecode(const char* input, size_t length, char* out, size_t outSize,
+                 bool* truncated = nullptr);
 
 enum class WifiMode { kOff, kStation, kAccessPoint };
 

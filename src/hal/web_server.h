@@ -30,6 +30,11 @@ class StationWebServer {
   void begin(WifiManager& wifi, WebDashboardHost& host);
   void loop(uint32_t nowMs);
 
+  // Short lived token that ties a POST /save to a form this server produced.
+  // Only requests from the setup AP can save credentials anyway; the token
+  // keeps other clients of the same AP from posting blindly.
+  const char* setupToken() const { return setupToken_; }
+
  private:
   void handleRoot();
   void handleStatus();
@@ -41,6 +46,8 @@ class StationWebServer {
   void handleSave();
   void handleNotFound();
 
+  bool setupRequestAuthorised() const;
+  void issueSetupToken(uint32_t nowMs);
   String buildSetupPage(const char* message);
   void sendSavedPage(const char* ssid);
 
@@ -50,6 +57,8 @@ class StationWebServer {
   bool pendingSave_ = false;
   uint32_t saveAtMs_ = 0;
   WifiCredentials pendingCredentials_;
+  char setupToken_[17] = {0};
+  uint32_t setupTokenIssuedMs_ = 0;
 };
 
 }  // namespace fw

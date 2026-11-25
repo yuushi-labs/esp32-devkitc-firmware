@@ -5,6 +5,7 @@
 #include <cstring>
 #include <vector>
 
+#include "app_config.h"
 #include "sensors/comfort.h"
 
 namespace fw {
@@ -304,7 +305,8 @@ footer{max-width:860px;margin:0 auto;padding:8px 20px 28px;color:var(--muted);fo
 <script>
 const $=id=>document.getElementById(id);
 const f=(v,d=1)=>v==null?'--':Number(v).toFixed(d);
-function row(k,v){return '<div><dt>'+k+'</dt><dd>'+v+'</dd></div>'}
+const esc=v=>String(v).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+function row(k,v){return '<div><dt>'+esc(k)+'</dt><dd>'+esc(v)+'</dd></div>'}
 async function tick(){
  try{
   const r=await fetch('/api/status',{cache:'no-store'});const s=await r.json();
@@ -365,11 +367,16 @@ tick();logs();setInterval(tick,2000);setInterval(logs,30000);
 }
 
 size_t formatSetupPage(const char* const* ssids, size_t count, const char* message,
-                       char* out, size_t outSize) {
+                       const char* token, char* out, size_t outSize) {
   Appender text{out, outSize};
   text.appendf(
       "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
-      "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
+      "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">");
+  if (count == 0) {
+    // The scan runs in the background, so keep reloading until it has results.
+    text.appendf("<meta http-equiv=\"refresh\" content=\"6\">");
+  }
+  text.appendf(
       "<title>ESP32 Wi-Fi setup</title><style>"
       "body{margin:0;background:#0d1117;color:#e6edf3;font:15px/1.5 system-ui,sans-serif}"
       "main{max-width:460px;margin:0 auto;padding:24px}"
@@ -391,6 +398,10 @@ size_t formatSetupPage(const char* const* ssids, size_t count, const char* messa
   }
   text.appendf(
       "<form method=\"post\" action=\"/save\">"
+      "<input type=\"hidden\" name=\"token\" value=\"");
+  appendHtmlEscaped(text, token != nullptr ? token : "");
+  text.appendf(
+      "\">"
       "<label for=\"ssid\">Network name (SSID)</label>"
       "<input id=\"ssid\" name=\"ssid\" maxlength=\"32\" required autocomplete=\"off\">"
       "<label for=\"password\">Password (leave empty for an open network)</label>"
@@ -416,6 +427,28 @@ size_t formatSetupPage(const char* const* ssids, size_t count, const char* messa
       "</ul><p style=\"color:#8b949e;font-size:12px\">The station saves the "
       "network in NVS and reconnects automatically. Hold BAK to leave setup "
       "mode without saving.</p></main></body></html>");
+  return text.needed;
+}
+
+size_t formatSetupLockedPage(char* out, size_t outSize) {
+  Appender text{out, outSize};
+  text.appendf(
+      "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
+      "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
+      "<title>Wi-Fi setup</title><style>body{margin:0;background:#0d1117;"
+      "color:#e6edf3;font:15px/1.5 system-ui,sans-serif}main{max-width:460px;"
+      "margin:0 auto;padding:24px}code{background:#161b22;border:1px solid #30363d;"
+      "border-radius:6px;padding:1px 5px}</style></head><body><main>"
+      "<h1>Wi-Fi setup is locked</h1>"
+      "<p>The station is connected to a saved network, so the Wi-Fi settings "
+      "cannot be changed from this page.</p>"
+      "<p>To change them, go to the Wi-Fi screen on the device and press "
+      "<code>PSH</code> (or send <code>wifi ap</code> over serial). The "
+      "<code>%s</code> access point starts with a password shown on the OLED; "
+      "join it and this page opens.</p>"
+      "<p><a href=\"/\" style=\"color:#58a6ff\">Back to the dashboard</a></p>"
+      "</main></body></html>",
+      kSetupApSsid);
   return text.needed;
 }
 
