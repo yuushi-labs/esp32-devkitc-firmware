@@ -256,11 +256,10 @@ void StationApp::sampleGraphs(uint32_t nowMs) {
 }
 
 void StationApp::updateQrPayload() {
-  if (!wifi_.connected()) {
-    stationUrl_[0] = '\0';
-    return;
-  }
-  formatStationUrl(wifi_.ip(), stationUrl_, sizeof(stationUrl_));
+  // The code has to work in both Wi-Fi states: the station IP once the stored
+  // network is up, and the setup AP address while the AP is serving the form.
+  formatDashboardUrl(wifi_.connected(), wifi_.ip(), wifi_.apActive(), stationUrl_,
+                     sizeof(stationUrl_));
 }
 
 void StationApp::updateView(uint32_t nowMs) {
@@ -668,11 +667,11 @@ void StationApp::announceMode() {
 }
 
 void StationApp::showQr() {
-  if (!wifi_.connected()) {
-    Serial.println("qr: wifi is not connected");
+  updateQrPayload();
+  if (stationUrl_[0] == '\0') {
+    Serial.println("qr: no dashboard address (wifi is not connected, setup AP is off)");
     return;
   }
-  updateQrPayload();
   if (!qr_.encode(stationUrl_)) {
     Serial.println("qr: encode failed");
     return;

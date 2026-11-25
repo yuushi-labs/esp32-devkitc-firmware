@@ -15,6 +15,12 @@ enum class LedMode { kBlink, kOn, kOff };
 
 const char* ledModeName(LedMode mode);
 
+// LED mode the firmware boots in. The tester blinks the onboard LED as a
+// "board is running" sign; the station boots dark so it does not blink in the
+// room, and lights up only for an explicit `led on` / `led blink`. Alerts and
+// the timer only blink the LED while it is in blink mode.
+LedMode defaultLedMode(FirmwareTarget target);
+
 enum class CommandType {
   kNone,
   kHelp,

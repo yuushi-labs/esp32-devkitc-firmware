@@ -7,7 +7,8 @@
 //
 // Common behaviour (see SPEC.md):
 //   - boot banner with version, board, target, chip model, chip id, reset reason
-//   - onboard LED on GPIO2 blinking at a 1 s period
+//   - onboard LED on GPIO2: dark on the station (no idle blink), blinking on the
+//     tester; `led on|off|blink` changes it at any time
 //   - 5 s heartbeat log with uptime, free heap and LED mode
 //   - serial commands: help, ping, info, pinout, led on/off/blink, plus the
 //     target specific commands listed by `help`
@@ -32,7 +33,7 @@ namespace {
 char g_lineStorage[fw::kMaxLineLength + 1];
 fw::LineBuffer g_lineBuffer(g_lineStorage, sizeof(g_lineStorage));
 
-fw::LedMode g_ledMode = fw::LedMode::kBlink;
+fw::LedMode g_ledMode = fw::defaultLedMode(fw::kFirmwareTarget);
 bool g_ledState = false;
 uint32_t g_lastBlinkMs = 0;
 uint32_t g_lastHeartbeatMs = 0;
@@ -214,7 +215,9 @@ void serviceHeartbeat(uint32_t nowMs) {
 void setup() {
   Serial.begin(fw::kSerialBaud);
   pinMode(fw::kLedPin, OUTPUT);
-  setLedMode(fw::LedMode::kBlink);
+  // The station starts dark: the OLED already shows everything, so the blue LED
+  // does not blink all night. `led on` / `led blink` still work.
+  setLedMode(fw::defaultLedMode(fw::kFirmwareTarget));
 
   const uint32_t nowMs = millis();
   g_lastBlinkMs = nowMs;

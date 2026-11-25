@@ -5,7 +5,7 @@
 #include <cstdint>
 
 #ifndef FW_VERSION
-#define FW_VERSION "0.3.0"
+#define FW_VERSION "0.3.1"
 #endif
 
 #ifndef FW_BOARD
@@ -98,6 +98,10 @@ constexpr uint32_t kDhtStartupDelayMs = 1500;
 // protected with a random key per start so the password typed into the setup
 // form is not sent over an open network; the key is shown on the OLED.
 constexpr const char* kSetupApSsid = "ESP32-Station-AP";
+// Address the setup AP hands out: the phone opens it, the captive portal
+// redirects to it, and the OLED QR code points at it while the AP is up.
+constexpr const char* kSetupApAddress = "192.168.4.1";
+constexpr const char* kSetupApUrl = "http://192.168.4.1/";
 constexpr size_t kSetupApPasswordLength = 8;
 // How long the setup form stays valid and how often the AP rescans for SSIDs.
 constexpr uint32_t kSetupSessionMs = 10 * 60 * 1000;

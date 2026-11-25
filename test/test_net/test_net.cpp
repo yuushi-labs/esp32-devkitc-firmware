@@ -4,6 +4,7 @@
 #include <cstring>
 
 #include "net/ntp_clock.h"
+#include "net/setup_session.h"
 #include "net/web_dashboard.h"
 #include "net/wifi_credentials.h"
 
@@ -13,6 +14,15 @@ void tearDown() {}
 namespace {
 
 using namespace fw;
+
+// Deterministic stand-ins for the esp_random() counter on the device.
+int g_tokenCounter = 0;
+char g_generatedToken[SetupSession::kTokenLength + 1] = {0};
+
+void testTokenGenerator(char* out, size_t outSize) {
+  ++g_tokenCounter;
+  std::snprintf(out, outSize, "tok-%d", g_tokenCounter);
+}
 
 void test_wifi_validation_rules() {
   TEST_ASSERT_EQUAL_INT(static_cast<int>(WifiValidation::kOk),
@@ -157,6 +167,81 @@ void test_station_url() {
   TEST_ASSERT_EQUAL_STRING("http://192.168.4.1/", out);
   formatStationUrl(nullptr, out, sizeof(out));
   TEST_ASSERT_EQUAL_STRING("http://0.0.0.0/", out);
+}
+
+void test_dashboard_url_covers_station_and_setup_ap() {
+  char out[40];
+  // Once the stored network is up the QR code opens the station's own IP.
+  TEST_ASSERT_EQUAL_UINT32(20, static_cast<uint32_t>(
+                                   formatDashboardUrl(true, "192.168.1.42", false, out, sizeof(out))));
+  TEST_ASSERT_EQUAL_STRING("http://192.168.1.42/", out);
+
+  // Before a network is saved the setup AP is the only dashboard there is, so
+  // CON on the Wi-Fi screen has to show its address instead of nothing.
+  TEST_ASSERT_EQUAL_UINT32(19, static_cast<uint32_t>(
+                                   formatDashboardUrl(false, "0.0.0.0", true, out, sizeof(out))));
+  TEST_ASSERT_EQUAL_STRING("http://192.168.4.1/", out);
+
+  // Neither associated nor serving the AP: no address to show.
+  TEST_ASSERT_EQUAL_UINT32(0, static_cast<uint32_t>(
+                                   formatDashboardUrl(false, "0.0.0.0", false, out, sizeof(out))));
+  TEST_ASSERT_EQUAL_STRING("", out);
+  TEST_ASSERT_EQUAL_UINT32(0, static_cast<uint32_t>(
+                                   formatDashboardUrl(false, "0.0.0.0", false, nullptr, 0)));
+}
+
+void test_setup_token_is_reused_while_it_is_valid() {
+  g_tokenCounter = 0;
+  SetupSession session;
+  char first[SetupSession::kTokenLength + 1];
+  std::snprintf(first, sizeof(first), "%s", session.token(1000, 600000, testTokenGenerator));
+  TEST_ASSERT_EQUAL_STRING("tok-1", first);
+
+  // /favicon.ico, /robots.txt and captive portal probes serve the page again;
+  // the form the browser is showing has to keep working.
+  const char* again = session.token(2000, 600000, testTokenGenerator);
+  TEST_ASSERT_EQUAL_STRING(first, again);
+  TEST_ASSERT_EQUAL_STRING("tok-1", session.token(590000, 600000, testTokenGenerator));
+  TEST_ASSERT_TRUE(session.authorised(first, 590000, 600000));
+}
+
+void test_setup_token_renews_after_it_expires() {
+  g_tokenCounter = 0;
+  SetupSession session;
+  char first[SetupSession::kTokenLength + 1];
+  std::snprintf(first, sizeof(first), "%s", session.token(1000, 600000, testTokenGenerator));
+
+  const char* renewed = session.token(1000 + 600001, 600000, testTokenGenerator);
+  TEST_ASSERT_TRUE(std::strcmp(first, renewed) != 0);
+  TEST_ASSERT_FALSE(session.authorised(first, 1000 + 600001, 600000));
+  TEST_ASSERT_TRUE(session.authorised(renewed, 1000 + 600001, 600000));
+}
+
+void test_setup_token_rejects_a_wrong_missing_or_reset_token() {
+  g_tokenCounter = 0;
+  SetupSession session;
+  std::snprintf(g_generatedToken, sizeof(g_generatedToken), "%s",
+                session.token(0, 600000, testTokenGenerator));
+
+  TEST_ASSERT_FALSE(session.authorised("tok-9", 10, 600000));
+  TEST_ASSERT_FALSE(session.authorised("", 10, 600000));
+  TEST_ASSERT_FALSE(session.authorised(nullptr, 10, 600000));
+
+  // Saving (or the AP stopping) drops the token, so the next form gets a new one.
+  session.reset();
+  TEST_ASSERT_FALSE(session.active());
+  TEST_ASSERT_FALSE(session.authorised(g_generatedToken, 20, 600000));
+  TEST_ASSERT_EQUAL_STRING("", session.current());
+
+  const char* fresh = session.token(30, 600000, testTokenGenerator);
+  TEST_ASSERT_EQUAL_STRING("tok-2", fresh);
+  TEST_ASSERT_TRUE(session.authorised(fresh, 40, 600000));
+}
+
+void test_setup_token_without_a_generator_stays_empty() {
+  SetupSession session;
+  TEST_ASSERT_EQUAL_STRING("", session.token(0, 600000, nullptr));
+  TEST_ASSERT_FALSE(session.authorised("", 0, 600000));
 }
 
 void test_civil_time_conversion() {
@@ -441,6 +526,11 @@ int main(int argc, char** argv) {
   RUN_TEST(test_setup_form_rejects_an_embedded_nul);
   RUN_TEST(test_wifi_status_report_formats_local_time);
   RUN_TEST(test_station_url);
+  RUN_TEST(test_dashboard_url_covers_station_and_setup_ap);
+  RUN_TEST(test_setup_token_is_reused_while_it_is_valid);
+  RUN_TEST(test_setup_token_renews_after_it_expires);
+  RUN_TEST(test_setup_token_rejects_a_wrong_missing_or_reset_token);
+  RUN_TEST(test_setup_token_without_a_generator_stays_empty);
   RUN_TEST(test_civil_time_conversion);
   RUN_TEST(test_timestamp_formatting);
   RUN_TEST(test_ntp_clock_extrapolates_and_clears);

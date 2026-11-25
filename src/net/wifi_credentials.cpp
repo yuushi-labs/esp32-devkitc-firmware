@@ -4,6 +4,7 @@
 #include <cstdio>
 #include <cstring>
 
+#include "app_config.h"
 #include "net/ntp_clock.h"
 
 namespace fw {
@@ -234,6 +235,21 @@ size_t formatStationUrl(const char* ip, char* out, size_t outSize) {
   const int needed = formatInto(out, outSize, "http://%s/",
                                 ip != nullptr && ip[0] != '\0' ? ip : "0.0.0.0");
   return needed > 0 ? static_cast<size_t>(needed) : 0;
+}
+
+size_t formatDashboardUrl(bool stationConnected, const char* stationIp, bool apActive,
+                          char* out, size_t outSize) {
+  if (out == nullptr || outSize == 0) {
+    return 0;
+  }
+  if (stationConnected) {
+    return formatStationUrl(stationIp, out, outSize);
+  }
+  if (apActive) {
+    return formatStationUrl(kSetupApAddress, out, outSize);
+  }
+  out[0] = '\0';
+  return 0;
 }
 
 }  // namespace fw

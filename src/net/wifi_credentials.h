@@ -76,4 +76,11 @@ size_t formatWifiStatus(const WifiStatus& status, char* out, size_t outSize);
 // "http://192.168.4.1/" for the OLED QR code and the dashboard link.
 size_t formatStationUrl(const char* ip, char* out, size_t outSize);
 
+// Dashboard address the QR code opens: `http://<station ip>/` once the station
+// is associated, `http://192.168.4.1/` (kSetupApUrl) while the setup AP is up so
+// the code also works before a network has been saved, and "" when neither is
+// available. Returns the characters written, 0 when there is no address.
+size_t formatDashboardUrl(bool stationConnected, const char* stationIp, bool apActive,
+                          char* out, size_t outSize);
+
 }  // namespace fw

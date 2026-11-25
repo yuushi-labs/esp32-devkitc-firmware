@@ -43,6 +43,10 @@ const char* ledModeName(LedMode mode) {
   return "blink";
 }
 
+LedMode defaultLedMode(FirmwareTarget target) {
+  return target == FirmwareTarget::kTester ? LedMode::kBlink : LedMode::kOff;
+}
+
 LineBuffer::LineBuffer(char* storage, size_t capacity)
     : storage_(storage), capacity_(capacity) {
   if (storage_ != nullptr && capacity_ > 0) {
