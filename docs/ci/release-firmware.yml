@@ -271,25 +271,58 @@ jobs:
 
           | ファイル | 用途 |
           | --- | --- |
-          | `esp32-devkitc-station-merged.bin` | 🎛️ 環境ステーション本体（`0x0000` から書き込み） |
+          | `esp32-devkitc-station-merged.bin` | 🎛️ 多機能環境ステーション本体（`0x0000` から書き込み） |
           | `esp32-devkitc-station-app.bin` | station のアプリ単体（`0x10000`） |
           | `flash-manifest.json` | station のマニフェスト（アプリが自動で読む既定のファイル） |
           | `esp32-devkitc-tester-merged.bin` | 🧪 パーツ動作確認テスト（`0x0000` から書き込み） |
           | `esp32-devkitc-tester-app.bin` | tester のアプリ単体（`0x10000`） |
           | `tester-flash-manifest.json` | tester のマニフェスト |
 
-          書き込みは [esp32-devkitc-flasher](https://github.com/yuushi-labs/esp32-devkitc-flasher) の Release 選択から。まず `tester` で I2C・センサー・ボタンの配線を確認し、そのあと `station` を書き込むのがおすすめです。
+          書き込みは [esp32-devkitc-flasher](https://github.com/yuushi-labs/esp32-devkitc-flasher) の Release 選択から。配線（`pins.json`、10 ピン）は **v0.2.0 から変更ありません**。はじめてなら、まず `tester` で I2C・センサー・ボタンの配線を確認し、そのあと `station` を書き込むのがおすすめです。
 
-          ### 🎛️ station
-          - OLED に温度・気圧・湿度・記録状態を表示（エンコーダで4ページ切替）
-          - `CON` 短押しで手動記録、長押しで記録 ON/OFF、`PSH` で間隔切替（10秒/1分/5分）
-          - LittleFS の `/log.csv` に `uptime_ms,temp_c,pressure_hpa,humidity_pct` を追記（flasher の LittleFS 吸い出しで読み出し可能）
+          ## 🎛️ station — v0.3.0 の新機能
 
-          ### 🧪 tester
-          - 起動時と5秒ごとに I2C 全アドレスをスキャンして OLED / BMP280 を判定
-          - BMP280 の温度・気圧、DHT11/DHT22 の湿度・温度を表示
-          - エンコーダ位置と PSH / BAK / CON の押下をリアルタイム表示
-          - シリアルコマンド: `SCAN` / `SENSORS` / `INPUTS`
+          6 モードの OLED UI です。エンコーダで項目を選び、`CON` / `PSH` で入り、`BAK` 長押しでホームへ戻ります。
+
+          | # | モード | できること |
+          | --- | --- | --- |
+          | 1 | 📊 環境モニター | 温度（BMP280 → DHT フォールバック）・湿度・気圧・不快指数・天気傾向。エンコーダでサマリー／ミニグラフ／詳細を切替。高温・乾燥・気圧急変で OLED と LED が知らせます |
+          | 2 | 📁 ログ（LittleFS） | NTP 時刻付き CSV を `/log.csv` に記録。`PSH` で 10 秒／1 分／5 分、`CON` 短押しで手動 1 件、長押しで記録 ON/OFF |
+          | 3 | 🌐 Wi-Fi ＆ Web | 初回は AP 設定モード。接続後は `http://<IP>/` のダッシュボードと JSON API、`CON` で OLED に QR コード |
+          | 4 | 📶 Bluetooth | センサー値の GATT 配信＋ HID メディアリモコン（音量・再生/停止・曲送り） |
+          | 5 | ⏱️ タイマー | 1〜60 分のカウントダウンとポモドーロ（25 分/5 分） |
+          | 6 | 🛠️ システム | IP / RSSI、BLE 状態、I2C スキャン、LittleFS 容量、Wi-Fi 設定の初期化 |
+
+          ### はじめての Wi-Fi 設定
+          1. 未設定で起動すると `ESP32-Station-AP` が立ち上がります。スマホで接続してください。
+          2. **AP は WPA2 で保護されていて、パスワードは起動ごとに変わります。** OLED の Wi-Fi 画面に出ている `pass xxxxxxxx` の 8 文字を入力します。
+          3. `http://192.168.4.1/` のフォームに周辺 SSID が並ぶので、選んでパスワードを保存します。保存後は自動でそのネットワークへ切り替わります。
+          4. 設定をやり直したいときは、Wi-Fi 画面で `PSH`（または `wifi ap`）を押すと AP 設定モードへ戻ります。もう一度 `PSH` で保存済みネットワークへ戻ります。
+
+          ### Web ダッシュボード
+          - `http://<IP>/`: 温湿度・気圧・不快指数を 2 秒ごとに更新、履歴グラフ、`/log.csv` ダウンロード、ログ消去、OLED への QR 表示
+          - `GET /api/status`: 現在値と Wi-Fi / BLE / ログ / タイマー状態（Raspberry Pi などからも）
+          - `GET /api/logs`: 直近 120 件の履歴 JSON
+          - 外部 CDN は使いません（インターネットにつながっていない LAN でも動きます）
+
+          ### ログとパーティション
+          - `/log.csv` のヘッダーは `timestamp,uptime_ms,temp_c,pressure_hpa,humidity_pct`（NTP 未同期のときは時刻欄が空欄）
+          - v0.2.0 の 4 列ログが残っているボードでは、起動時に `/log-v020.csv` へ退避してから新しい 5 列ファイルを始めます
+          - パーティションは `no_ota.csv`（app 2 MB ＋ LittleFS 1.9 MB）。マニフェストの `filesystems` も同じ値（`0x210000` / 1,966,080 B）で、flasher の吸い出しでログをそのまま取り出せます
+
+          ### BLE
+          - デバイス名 `ESP32-EnvStation`。Environmental Sensing（`0x181A`）相当の温度・湿度・気圧と状態通知
+          - メディアリモコン: エンコーダ → 音量、`PSH` → 再生/停止、`CON` → 次の曲、`BAK` → 前の曲（`BAK` 長押しでメニュー）
+
+          ### シリアルコマンド（115200 bps）
+          `help` / `ping` / `info` / `scan` / `sensors` / `log [on|off|now|clear]` / `page [1..6]` / `mode [env|logs|wifi|ble|timer|system|menu]` / `wifi [status|ap|station|clear]` / `ble [status|hid on|hid off]` / `timer [N|start|pause|reset]` / `led [on|off|blink]`
+
+          ## 🧪 tester
+          v0.2.0 のままです（I2C 全スキャン、BMP280 / DHT の応答、エンコーダとボタンの導通、`scan` / `sensors` / `inputs`）。
+
+          ## 検証
+          - `pio test -e native`（ホスト単体テスト）と `python3 -m unittest discover -s tests/python`、station / tester の両ビルドが GitHub Actions で成功
+          - アセットはタグのコミットからビルドされ、マニフェストの `build.gitCommit` がタグのコミットと一致していることを確認済み
           EOF
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
             gh release upload "$TAG" dist/* --clobber --repo "$GITHUB_REPOSITORY"
