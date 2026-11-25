@@ -110,13 +110,15 @@ v0.3.0 でも **配線は v0.2.0 から変更ありません**（`pins.json` も
 - Wi-Fi + NTP 同期時は `timestamp` に `YYYY-MM-DD HH:MM:SS`（JST `UTC+9`）を記録し、未同期時は空欄
 - 未接続センサーの列は空欄（例: `,1234,23.45,,`）になり、列数は常に一定
 - `no_ota.csv` の `spiffs` 領域（`0x210000` / 1,966,080 B）を使います。`esp32-devkitc-flasher` の LittleFS 吸い出しでそのまま `/log.csv` を読み出せます
+- v0.2.0 の 4 列ログが残っている場合は、起動時に `/log-v020.csv` へ退避してから新しい 5 列ファイルを始めます（同じファイルに 2 種類の列構成を混ぜません）
 
 ### Wi-Fi ＆ Web ダッシュボード
-- **初回設定（AP モード）**: SSID `ESP32-Station-AP`（オープン）に接続し、`http://192.168.4.1/` のフォームで周辺 SSID を選びパスワードを保存します。認証情報は NVS（`Preferences`）に保存され、次回起動時に自動接続します
+- **初回設定（AP モード）**: SSID `ESP32-Station-AP` は **WPA2 で保護**され、パスワードは起動ごとに生成されて OLED の Wi-Fi 画面に表示されます（周囲から設定用パスワードを盗み見られないようにするため）。接続して `http://192.168.4.1/` のフォームで周辺 SSID を選びパスワードを保存します。認証情報は NVS（`Preferences`）に保存され、次回起動時に自動接続します
+- **設定の変更は AP モードのみ**: 保存済みネットワークにつながっている間は `/setup` を開いても変更できません（デバイスの Wi-Fi 画面で `PSH`、または `wifi ap` で AP モードに入る必要があります）。設定フォームには使い捨てトークンが入り、`/save` はそのトークンと AP モードの両方を満たす要求だけを受け付けます
 - **ダッシュボード**: `http://<ESP32 の IP>/` に外部 CDN 非依存の HTML/CSS/JS を配信します。温湿度・気圧・不快指数・Wi-Fi/BLE/ログ/タイマー状態を自動更新し、履歴グラフ・`/log.csv` ダウンロード・ログ消去を提供します
-- **JSON API**: `GET /api/status`（現在値と各機能の状態）、`GET /api/logs`（直近 240 件の履歴）、`GET /download`（CSV）
-- **QR コード**: Wi-Fi モードで `CON` を押すか、Web ダッシュボードの「Show QR on OLED」を押すと `http://<IP>/` の QR コードを OLED に描画します（内蔵エンコーダ、ISO/IEC 18004 byte mode・version 1〜10）
-- 未設定・切断時も環境モニター・ログ・BLE・タイマーはオフラインで動作し、Wi-Fi はブロッキングせずバックグラウンドで再接続します
+- **JSON API**: `GET /api/status`（現在値と各機能の状態）、`GET /api/logs`（直近 120 件の履歴）、`GET /download`（CSV）
+- **QR コード**: Wi-Fi モードで `CON` を押すか、ダッシュボードの「Show QR on OLED」を押すと `http://<IP>/` の QR コードを OLED に描画します（内蔵エンコーダ、ISO/IEC 18004 byte mode・version 1〜10）。128x64 パネルでは白地に黒モジュール・1 モジュール 2 px（約 10 mm 四方）で描き、パネル自体の余白をクワイエットゾーンにします。収まらない大きさのときは QR の代わりに URL を表示します
+- 未設定・切断時も環境モニター・ログ・BLE・タイマーはオフラインで動作し、Wi-Fi はブロッキングせずバックグラウンドで再接続します。設定ページの周辺 SSID スキャンも非同期で、ページ応答やボタン操作を止めません
 
 ### Bluetooth（BLE）
 - **センサー配信**: デバイス名 `ESP32-EnvStation`。Environmental Sensing Service（`0x181A`）相当の温度・湿度・気圧特性と状態通知（2 秒間隔）を公開します
@@ -131,9 +133,9 @@ v0.3.0 でも **配線は v0.2.0 から変更ありません**（`pins.json` も
 | `log` / `log on` / `log off` / `log now` / `log clear` | ログ状態の表示・開始・停止・手動記録・消去 |
 | `page` / `page 1..6` | 次のモード / 指定モードへ |
 | `mode` / `mode NAME` | 現在の画面・モード表示 / `env` `logs` `wifi` `ble` `timer` `system` `menu` を開く |
-| `wifi` / `wifi ap` / `wifi clear` | Wi-Fi・NTP 状態 / AP 設定モード開始 / 保存済み認証情報を消去 |
+| `wifi` / `wifi ap` / `wifi station` / `wifi clear` | Wi-Fi・NTP 状態 / AP 設定モード開始 / 保存済みネットワークへ再接続 / 保存済み認証情報を消去 |
 | `ble` / `ble hid on` / `ble hid off` | BLE 状態 / メディアリモコンモード ON・OFF |
-| `timer` / `timer N` / `timer start|pause|reset` | タイマー状態 / 1〜60 分設定 / 開始・一時停止・リセット |
+| `timer` / `timer N` / `timer start\|pause\|reset` | タイマー状態 / 1〜60 分設定 / 開始・一時停止・リセット |
 
 ## 🧪 tester（パーツ動作確認）
 
