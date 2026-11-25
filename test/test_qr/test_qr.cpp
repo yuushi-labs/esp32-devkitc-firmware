@@ -1,5 +1,6 @@
 #include <unity.h>
 
+#include <cstdio>
 #include <cstring>
 
 #include "graphics/qr_code.h"
@@ -142,30 +143,79 @@ void test_encoding_clears_previous_state() {
   TEST_ASSERT_EQUAL_INT(0, qr.size());
 }
 
-void test_renderer_fits_and_centres_the_code() {
+// Reference matrix for "hello world" (byte mode, ECC L, version 1, mask 0),
+// produced by an independent encoder (python-qrcode 8.2) so a regression in the
+// payload, the error correction or the mask cannot slip through.
+const char* const kHelloWorldMask0[21] = {
+    "111111100101101111111", "100000100111001000001", "101110101101101011101",
+    "101110100101001011101", "101110100010101011101", "100000100000101000001",
+    "111111101010101111111", "000000001101100000000", "111011111111011000100",
+    "000101011110001110011", "111011110100110111111", "010010010110000010010",
+    "111010110010110110000", "000000001001010010111", "111111101001000110111",
+    "100000101111100100001", "101110101011000010000", "101110100111001110110",
+    "101110101100101010101", "100000101011000010010", "111111101101100100011",
+};
+
+void test_mask_zero_matrix_matches_the_reference() {
   QrCode qr;
-  TEST_ASSERT_TRUE(qr.encode("hello"));
+  TEST_ASSERT_TRUE(qr.encodeWithMask("hello world", QrEcc::kLow, 0));
+  TEST_ASSERT_EQUAL_INT(1, qr.version());
+  TEST_ASSERT_EQUAL_INT(21, qr.size());
+
+  for (int y = 0; y < 21; ++y) {
+    for (int x = 0; x < 21; ++x) {
+      const bool expected = kHelloWorldMask0[y][x] == '1';
+      if (qr.module(x, y) != expected) {
+        char message[64];
+        std::snprintf(message, sizeof(message), "module (%d,%d) differs from the reference",
+                      x, y);
+        TEST_FAIL_MESSAGE(message);
+      }
+    }
+  }
+}
+
+void test_renderer_scales_the_code_for_a_station_url() {
+  QrCode qr;
+  TEST_ASSERT_TRUE(qr.encode("http://192.168.4.1/"));
+  TEST_ASSERT_EQUAL_INT(2, qr.version());
 
   Framebuffer framebuffer;
   const int scale = drawQrCode(framebuffer, qr, Framebuffer::kWidth, Framebuffer::kHeight);
-  // Version 1 is 21 modules; with an eight module quiet zone it fits at 2x.
+  // A 25 module code at two pixels per module is 50 px: the largest readable
+  // size a 64 px tall panel allows.
   TEST_ASSERT_EQUAL_INT(2, scale);
 
-  // Quiet zone stays light, the finder pattern has dark pixels.
-  TEST_ASSERT_FALSE(framebuffer.pixel(0, 0));
+  // Dark modules on a lit background: the corners are background, the finder
+  // pattern starts with a dark run.
+  TEST_ASSERT_TRUE(framebuffer.pixel(0, 0));
+  const int originX = (Framebuffer::kWidth - qr.size() * scale) / 2;
+  const int originY = (Framebuffer::kHeight - qr.size() * scale) / 2;
+  // The top-left finder pattern is dark; the separator around it stays lit.
+  TEST_ASSERT_FALSE(framebuffer.pixel(originX, originY));
+  TEST_ASSERT_FALSE(framebuffer.pixel(originX + scale - 1, originY + scale - 1));
+  TEST_ASSERT_TRUE(framebuffer.pixel(originX + 7 * scale, originY + 7 * scale));
+
+  // The whole panel is lit except the dark modules, so the panel itself supplies
+  // the quiet zone a scanner needs.
   size_t dark = 0;
   for (int y = 0; y < Framebuffer::kHeight; ++y) {
     for (int x = 0; x < Framebuffer::kWidth; ++x) {
-      dark += framebuffer.pixel(x, y) ? 1 : 0;
+      dark += framebuffer.pixel(x, y) ? 0 : 1;
     }
   }
   TEST_ASSERT_TRUE(dark > 100);
+  TEST_ASSERT_TRUE(dark < static_cast<size_t>(Framebuffer::kWidth * Framebuffer::kHeight));
 }
 
-void test_renderer_rejects_empty_codes() {
+void test_renderer_rejects_codes_it_cannot_scale() {
   QrCode qr;
   Framebuffer framebuffer;
   TEST_ASSERT_EQUAL_INT(0, drawQrCode(framebuffer, qr, 128, 64));
+
+  // A 25 module code needs at least 25 px per side.
+  TEST_ASSERT_TRUE(qr.encode("http://192.168.4.1/"));
+  TEST_ASSERT_EQUAL_INT(0, drawQrCode(framebuffer, qr, 24, 20));
 }
 
 }  // namespace
@@ -184,7 +234,8 @@ int main(int argc, char** argv) {
   RUN_TEST(test_dark_module_is_always_set);
   RUN_TEST(test_out_of_range_modules_are_light);
   RUN_TEST(test_encoding_clears_previous_state);
-  RUN_TEST(test_renderer_fits_and_centres_the_code);
-  RUN_TEST(test_renderer_rejects_empty_codes);
+  RUN_TEST(test_mask_zero_matrix_matches_the_reference);
+  RUN_TEST(test_renderer_scales_the_code_for_a_station_url);
+  RUN_TEST(test_renderer_rejects_codes_it_cannot_scale);
   return UNITY_END();
 }
