@@ -5,6 +5,8 @@
 #include <NimBLEDevice.h>
 #include <NimBLEHIDDevice.h>
 
+#include <atomic>
+#include <cstddef>
 #include <cstdint>
 
 #include "ble/ble_protocol.h"
@@ -24,17 +26,28 @@ class BleService {
   bool hidMode() const { return hidMode_; }
 
   bool enabled() const { return enabled_; }
-  bool connected() const { return connected_; }
+  // True while at least one client is connected. Written from the NimBLE host
+  // task, read from the application task, so it is an atomic counter.
+  bool connected() const { return connections_.load() > 0; }
 
-  // Queues one consumer report; the key release follows after a short delay.
+  // Queues one consumer report; each queued action is sent as its own
+  // press/release pair, in order, from loop().
   bool sendMediaAction(MediaAction action);
 
   // Called from the NimBLE server callbacks.
   void notifyConnected(bool connected);
 
  private:
+  static constexpr size_t kMediaQueueSize = 4;
+
   void startAdvertising();
   void updateEnvironment(const SensorSnapshot& sensors, bool alertActive);
+  void pumpMediaQueue(uint32_t nowMs);
+  void sendReport(uint16_t usage);
+  bool queuePush(MediaAction action);
+  MediaAction queuePop();
+  bool queueEmpty() const { return mediaHead_ == mediaTail_; }
+  void clearQueue() { mediaHead_ = 0; mediaTail_ = 0; }
 
   NimBLEServer* server_ = nullptr;
   NimBLEHIDDevice* hid_ = nullptr;
@@ -46,10 +59,16 @@ class BleService {
 
   bool enabled_ = false;
   bool hidMode_ = false;
-  bool connected_ = false;
-  bool releasePending_ = false;
+  std::atomic<uint8_t> connections_{0};
+  bool pressPending_ = false;
+  bool reportSent_ = false;
   uint32_t releaseAtMs_ = 0;
+  uint32_t lastReportMs_ = 0;
   uint32_t lastNotifyMs_ = 0;
+
+  MediaAction mediaQueue_[kMediaQueueSize] = {};
+  size_t mediaHead_ = 0;
+  size_t mediaTail_ = 0;
 };
 
 }  // namespace fw
