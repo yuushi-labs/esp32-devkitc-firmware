@@ -22,6 +22,12 @@ constexpr size_t kMaxScannedSsids = 12;
 // Give the browser time to render the "saved" page before the AP goes down.
 constexpr uint32_t kSaveDelayMs = 1500;
 
+// Eight random bytes as hex, the token format the setup form carries.
+void generateSetupToken(char* out, size_t outSize) {
+  std::snprintf(out, outSize, "%08lx%08lx", static_cast<unsigned long>(esp_random()),
+                static_cast<unsigned long>(esp_random()));
+}
+
 }  // namespace
 
 void StationWebServer::begin(WifiManager& wifi, WebDashboardHost& host) {
@@ -36,6 +42,12 @@ void StationWebServer::begin(WifiManager& wifi, WebDashboardHost& host) {
   server_.on("/api/qr", HTTP_POST, [this]() { handleQr(); });
   server_.on("/setup", HTTP_GET, [this]() { handleSetup(); });
   server_.on("/save", HTTP_POST, [this]() { handleSave(); });
+  // Browsers ask for these on their own. Answering here keeps them out of the
+  // captive portal redirect (and so out of handleSetup) on both GET and HEAD.
+  server_.on("/favicon.ico", HTTP_GET, [this]() { handleNoContent(); });
+  server_.on("/favicon.ico", HTTP_HEAD, [this]() { handleNoContent(); });
+  server_.on("/robots.txt", HTTP_GET, [this]() { handleNoContent(); });
+  server_.on("/robots.txt", HTTP_HEAD, [this]() { handleNoContent(); });
   server_.onNotFound([this]() { handleNotFound(); });
   server_.begin();
   Serial.printf("web: listening on port %u\n", static_cast<unsigned>(kWebServerPort));
@@ -43,6 +55,10 @@ void StationWebServer::begin(WifiManager& wifi, WebDashboardHost& host) {
 
 void StationWebServer::loop(uint32_t nowMs) {
   server_.handleClient();
+  if (setupSession_.active() && !setupAccessPointActive()) {
+    // The setup AP is down, so the form it served can no longer be posted.
+    setupSession_.reset();
+  }
   if (pendingSave_ && nowMs >= saveAtMs_) {
     pendingSave_ = false;
     if (host_ != nullptr) {
@@ -152,32 +168,27 @@ void StationWebServer::handleQr() {
   server_.send(200, "application/json", "{\"ok\":true}");
 }
 
-void StationWebServer::issueSetupToken(uint32_t nowMs) {
-  // Two 32 bit random values: unique per page, unguessable from the network, and
-  // cheap to regenerate every time the form is served.
-  std::snprintf(setupToken_, sizeof(setupToken_), "%08lx%08lx",
-                static_cast<unsigned long>(esp_random()),
-                static_cast<unsigned long>(esp_random()));
-  setupTokenIssuedMs_ = nowMs;
+void StationWebServer::ensureSetupToken(uint32_t nowMs) {
+  // The token is reused while it is valid: a second page load (the browser
+  // asking for /favicon.ico, a captive portal probe, the reload while the scan
+  // is still running) must not invalidate the form the user is filling in.
+  setupSession_.token(nowMs, kSetupSessionMs, generateSetupToken);
 }
 
 bool StationWebServer::setupAccessPointActive() const {
   return wifi_ != nullptr && wifi_->apActive();
 }
 
-bool StationWebServer::setupRequestAuthorised() const {
+bool StationWebServer::setupRequestAuthorised() {
   if (!setupAccessPointActive()) {
     // Changing the saved network needs someone at the device (or on the setup
     // AP); a client of the station's own LAN cannot rewrite it.
     return false;
   }
-  if (setupToken_[0] == '\0') {
+  if (!server_.hasArg("token")) {
     return false;
   }
-  if ((millis() - setupTokenIssuedMs_) > kSetupSessionMs) {
-    return false;
-  }
-  return true;
+  return setupSession_.authorised(server_.arg("token").c_str(), millis(), kSetupSessionMs);
 }
 
 String StationWebServer::buildSetupPage(const char* message) {
@@ -198,7 +209,7 @@ String StationWebServer::buildSetupPage(const char* message) {
   if (!buffer) {
     return String("<html><body>out of memory</body></html>");
   }
-  const size_t needed = formatSetupPage(pointers, count, message, setupToken_,
+  const size_t needed = formatSetupPage(pointers, count, message, setupSession_.current(),
                                         wifi_ != nullptr && wifi_->scanInProgress(),
                                         buffer.get(), kSetupBufferSize);
   if (needed >= kSetupBufferSize) {
@@ -223,15 +234,14 @@ void StationWebServer::handleSetup() {
     return;
   }
   // Serving the form is what starts the setup session; only a POST carrying
-  // this token can save, and only for the next ten minutes.
-  issueSetupToken(millis());
+  // this token can save, and only for the next ten minutes. A page load while
+  // the token is still valid keeps the token it already handed out.
+  ensureSetupToken(millis());
   server_.send(200, "text/html", buildSetupPage(""));
 }
 
 void StationWebServer::handleSave() {
-  if (!setupRequestAuthorised() ||
-      !server_.hasArg("token") ||
-      server_.arg("token") != String(setupToken_)) {
+  if (!setupRequestAuthorised()) {
     // Anything that did not come from the form this server just handed out (and
     // is not on the setup AP) is refused before it touches the credentials.
     server_.send(403, "text/plain", "authorisation required");
@@ -259,6 +269,9 @@ void StationWebServer::handleSave() {
   pendingCredentials_ = credentials;
   pendingSave_ = true;
   saveAtMs_ = millis() + kSaveDelayMs;
+  // The form has done its job; the next save needs a fresh form and a fresh
+  // token.
+  setupSession_.reset();
   sendSavedPage(credentials.ssid);
 }
 
@@ -276,10 +289,14 @@ void StationWebServer::sendSavedPage(const char* ssid) {
   server_.send(200, "text/html", buffer.get());
 }
 
+void StationWebServer::handleNoContent() {
+  server_.send(204, "text/plain", "");
+}
+
 void StationWebServer::handleNotFound() {
   if (wifi_ != nullptr && wifi_->apActive()) {
     // Captive portal: every probe lands on the setup page.
-    server_.sendHeader("Location", "http://192.168.4.1/");
+    server_.sendHeader("Location", kSetupApUrl);
     server_.send(302, "text/plain", "");
     return;
   }

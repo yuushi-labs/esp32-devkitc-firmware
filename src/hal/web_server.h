@@ -7,6 +7,7 @@
 #include <cstdint>
 
 #include "app_config.h"
+#include "net/setup_session.h"
 #include "net/web_dashboard.h"
 #include "net/wifi_credentials.h"
 
@@ -32,8 +33,10 @@ class StationWebServer {
 
   // Short lived token that ties a POST /save to a form this server produced.
   // Only requests from the setup AP can save credentials anyway; the token
-  // keeps other clients of the same AP from posting blindly.
-  const char* setupToken() const { return setupToken_; }
+  // keeps other clients of the same AP from posting blindly. The same token is
+  // reused until it expires, so serving the page again cannot break a form that
+  // is already on screen.
+  const char* setupToken() const { return setupSession_.current(); }
 
  private:
   void handleRoot();
@@ -45,10 +48,12 @@ class StationWebServer {
   void handleSetup();
   void handleSave();
   void handleNotFound();
+  // Quiet answer for browser extras that are not part of the setup flow.
+  void handleNoContent();
 
-  bool setupRequestAuthorised() const;
+  bool setupRequestAuthorised();
   bool setupAccessPointActive() const;
-  void issueSetupToken(uint32_t nowMs);
+  void ensureSetupToken(uint32_t nowMs);
   String buildSetupPage(const char* message);
   void sendSavedPage(const char* ssid);
 
@@ -58,8 +63,7 @@ class StationWebServer {
   bool pendingSave_ = false;
   uint32_t saveAtMs_ = 0;
   WifiCredentials pendingCredentials_;
-  char setupToken_[17] = {0};
-  uint32_t setupTokenIssuedMs_ = 0;
+  SetupSession setupSession_;
 };
 
 }  // namespace fw

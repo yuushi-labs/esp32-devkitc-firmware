@@ -62,6 +62,16 @@ void test_led_commands_carry_the_mode() {
                         static_cast<int>(blink.ledMode));
 }
 
+void test_boot_led_mode_keeps_the_station_dark() {
+  // The station is a desk gadget: no idle blink, but the serial command still
+  // switches the LED on or into a blink when asked.
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(LedMode::kOff),
+                        static_cast<int>(fw::defaultLedMode(fw::FirmwareTarget::kStation)));
+  // The tester keeps blinking: the LED doubles as a "board is running" sign.
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(LedMode::kBlink),
+                        static_cast<int>(fw::defaultLedMode(fw::FirmwareTarget::kTester)));
+}
+
 void test_malformed_led_commands_are_unknown() {
   assertCommand(CommandType::kUnknown, "led");
   assertCommand(CommandType::kUnknown, "led on now");
@@ -323,6 +333,7 @@ int main(int argc, char** argv) {
   RUN_TEST(test_parsing_is_case_insensitive_and_trims_whitespace);
   RUN_TEST(test_empty_input_is_ignored);
   RUN_TEST(test_led_commands_carry_the_mode);
+  RUN_TEST(test_boot_led_mode_keeps_the_station_dark);
   RUN_TEST(test_malformed_led_commands_are_unknown);
   RUN_TEST(test_extra_arguments_are_rejected);
   RUN_TEST(test_unknown_commands);

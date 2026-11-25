@@ -352,7 +352,7 @@ void buildStationPage(StationMode mode, const StationView& view, PageLines* out)
         addf(*out, 1, "pass %s",
              view.apPassword[0] != '\0' ? view.apPassword : "-");
         out->add("join, then open");
-        out->add("http://192.168.4.1/");
+        out->add(kSetupApUrl);
       } else if (view.wifiConnected) {
         addf(*out, 1, "ssid %s", view.wifiSsid[0] != '\0' ? view.wifiSsid : "-");
         addf(*out, 1, "ip %s", view.ip);

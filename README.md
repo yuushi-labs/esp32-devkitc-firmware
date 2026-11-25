@@ -7,7 +7,7 @@ ESP32-DevKitC 向けのファームウェアリポジトリです。1 つのコ�
 | 🎛️ `station`（多機能環境ステーション） | `esp32dev_station` | 温度・気圧・湿度・不快指数の表示、OLED ミニグラフ、NTP 時刻付き LittleFS 記録、Wi-Fi Web ダッシュボード＆QR、BLE センサー配信＆メディアリモコン、物理タイマー／ポモドーロ |
 | 🧪 `tester`（パーツ動作確認） | `esp32dev_tester` | I2C バス全スキャン、BMP280 / DHT の応答確認、エンコーダ・3 ボタンの導通を OLED とシリアルにリアルタイム表示（v0.2.0 相当） |
 
-v0.3.0 でも **配線は v0.2.0 から変更ありません**（`pins.json` もそのまま）。`tester` で配線とパーツを確認してから `station` を書き込む、という使い方を想定しています。
+v0.3.1 でも **配線は v0.2.0 から変更ありません**（`pins.json` もそのまま）。`tester` で配線とパーツを確認してから `station` を書き込む、という使い方を想定しています。v0.3.1 は v0.3.0 の実機バグ 2 点（AP 設定フォームの `403 authorisation required`、AP モード中の QR コード非表示）と、station 起動時の LED 点滅を修正した版で、配線・API・パーティションは v0.3.0 と同じです。
 
 ## ターゲット環境
 - **ボード**: ESP32-DevKitC（`esp32dev` / 無印 ESP32、4MB フラッシュ）
@@ -15,7 +15,7 @@ v0.3.0 でも **配線は v0.2.0 から変更ありません**（`pins.json` も
 - **シリアル通信**: 115200 bps
 - **外部ライブラリ**: [`h2zero/NimBLE-Arduino`](https://github.com/h2zero/NimBLE-Arduino)（BLE 用）のみ。OLED・BMP280・DHT・QR コードは本リポジトリ内で実装
 - **パーティション**: `no_ota.csv`（app 2MB + LittleFS 約 1.9MB）。Wi-Fi + Web サーバー + BLE を同時に積むと `default.csv` の 1.25MB アプリ枠に収まらないため、OTA を外してアプリ領域を広げています。書き込みは USB 経由の Android アプリで行います
-- **バージョン**: `src/app_config.h` の既定値は `0.3.0`。リリースビルドでは `FW_VERSION` で上書きします
+- **バージョン**: `src/app_config.h` の既定値は `0.3.1`。リリースビルドでは `FW_VERSION` で上書きします
 
 ## ハードウェア構成
 
@@ -69,7 +69,7 @@ v0.3.0 でも **配線は v0.2.0 から変更ありません**（`pins.json` も
 ## 共通のシリアル機能
 
 - 起動バナー（バージョン・ボード・ターゲット・チップ情報・リセット理由）
-- オンボード LED（GPIO2）の 1 秒点滅
+- オンボード LED（GPIO2）: `station` は**消灯で起動**（机の上で点滅し続けない）、`tester` は 1 秒点滅。`led on` / `led blink` でいつでも切り替えできます
 - 5 秒ごとの `heartbeat uptime_ms=... free_heap=... led_mode=...`
 - 共通コマンド: `help` / `ping` / `info` / `pinout` / `led on|off|blink`
 
@@ -90,7 +90,7 @@ v0.3.0 でも **配線は v0.2.0 から変更ありません**（`pins.json` も
 - 温度が 2 倍角フォントで大きく表示され、気圧・湿度・不快指数・天気傾向（sunny / cloudy / rain）を 1 画面にまとめます
 - グラフ画面は直近 64 サンプル（10 秒間隔）の温度・気圧を 2 本のミニ折れ線で描画します
 - 詳細画面は BMP280 のチップ名・アドレス、気圧トレンド、DHT の値、不快指数を表示します
-- しきい値アラート: 高温 **30℃ 以上**、乾燥 **35% 以下**、気圧急変 **1.5 hPa 以上**。画面に `! HOT31.0 DRY30 PJMP` のように表示し、オンボード LED を高速点滅します
+- しきい値アラート: 高温 **30℃ 以上**、乾燥 **35% 以下**、気圧急変 **1.5 hPa 以上**。画面に `! HOT31.0 DRY30 PJMP` のように表示します（LED は `led blink` にしているときだけ高速点滅し、既定の消灯では光りません）
 
 ### ボタン操作（モード別）
 | 操作 | 環境モニター | ログ | Wi-Fi | BLE（HID モード） | タイマー |
@@ -102,7 +102,7 @@ v0.3.0 でも **配線は v0.2.0 から変更ありません**（`pins.json` も
 | `CON` 長押し（0.9 秒） | — | 記録 ON / OFF | — | — | — |
 | `BAK` 長押し（0.9 秒） | ホームへ | ホームへ | ホームへ | ホームへ | ホームへ |
 
-タイマーは 00:00 で OLED を反転点滅し、LED で通知します。
+タイマーは 00:00 で OLED を反転点滅して知らせます（LED は `led blink` のときだけ一緒に点滅）。
 
 ### LittleFS ログ
 - `LittleFS.begin(true)` でマウント（未フォーマットなら自動フォーマット）
@@ -114,10 +114,10 @@ v0.3.0 でも **配線は v0.2.0 から変更ありません**（`pins.json` も
 
 ### Wi-Fi ＆ Web ダッシュボード
 - **初回設定（AP モード）**: SSID `ESP32-Station-AP` は **WPA2 で保護**され、パスワードは起動ごとに生成されて OLED の Wi-Fi 画面に表示されます（周囲から設定用パスワードを盗み見られないようにするため）。接続して `http://192.168.4.1/` のフォームで周辺 SSID を選びパスワードを保存します。認証情報は NVS（`Preferences`）に保存され、次回起動時に自動接続します
-- **設定の変更は AP モードのみ**: 保存済みネットワークにつながっている間は `/setup` を開いても変更できません（デバイスの Wi-Fi 画面で `PSH`、または `wifi ap` で AP モードに入る必要があります）。設定フォームには使い捨てトークンが入り、`/save` はそのトークンと AP モードの両方を満たす要求だけを受け付けます
+- **設定フォームのトークン**: フォームに埋めた使い捨てトークンは**有効な間は使い回します**（ページ取得のたびに作り直さない）。ブラウザが裏で `/favicon.ico` や captive portal の確認を投げても、画面に出ているフォームのトークンが無効になることはありません。トークンは保存成功時と AP 終了時に破棄されます。`/favicon.ico` と `/robots.txt` は 204（本文なし）で返します
 - **ダッシュボード**: `http://<ESP32 の IP>/` に外部 CDN 非依存の HTML/CSS/JS を配信します。温湿度・気圧・不快指数・Wi-Fi/BLE/ログ/タイマー状態を自動更新し、履歴グラフ・`/log.csv` ダウンロード・ログ消去を提供します
 - **JSON API**: `GET /api/status`（現在値と各機能の状態）、`GET /api/logs`（直近 120 件の履歴）、`GET /download`（CSV）
-- **QR コード**: Wi-Fi モードで `CON` を押すか、ダッシュボードの「Show QR on OLED」を押すと `http://<IP>/` の QR コードを OLED に描画します（内蔵エンコーダ、ISO/IEC 18004 byte mode・version 1〜10）。128x64 パネルでは白地に黒モジュール・1 モジュール 2 px（約 10 mm 四方）で描き、パネル自体の余白をクワイエットゾーンにします。収まらない大きさのときは QR の代わりに URL を表示します
+- **QR コード**: Wi-Fi モードで `CON` を押すか、ダッシュボードの「Show QR on OLED」を押すと QR コードを OLED に描画します。Wi-Fi 接続中は `http://<IP>/`、**AP 設定モード中は `http://192.168.4.1/`** を指すので、保存前でもスマホで読み取るだけで設定画面を開けます（内蔵エンコーダ、ISO/IEC 18004 byte mode・version 1〜10）。128x64 パネルでは白地に黒モジュール・1 モジュール 2 px（約 10 mm 四方）で描き、パネル自体の余白をクワイエットゾーンにします。収まらない大きさのときは QR の代わりに URL を表示します
 - 未設定・切断時も環境モニター・ログ・BLE・タイマーはオフラインで動作し、Wi-Fi はブロッキングせずバックグラウンドで再接続します。設定ページの周辺 SSID スキャンも非同期で、ページ応答やボタン操作を止めません
 
 ### Bluetooth（BLE）
@@ -193,7 +193,7 @@ v0.3.0 でも **配線は v0.2.0 から変更ありません**（`pins.json` も
 
 ### ビルドとテスト
 ```bash
-pio test -e native                  # ホスト環境のユニットテスト（212 ケース）
+pio test -e native                  # ホスト環境のユニットテスト（226 ケース）
 pio run -e esp32dev_station         # 多機能環境ステーション
 pio run -e esp32dev_tester          # パーツ動作確認
 pio run -e esp32dev_station -t upload
@@ -203,19 +203,19 @@ python3 -m unittest discover -s tests/python   # リリース生成・パーテ�
 
 ### リリース用バイナリの生成
 ```bash
-FW_VERSION=0.3.0 pio run -e esp32dev_station
-FW_VERSION=0.3.0 pio run -e esp32dev_tester
+FW_VERSION=0.3.1 pio run -e esp32dev_station
+FW_VERSION=0.3.1 pio run -e esp32dev_tester
 python scripts/build_release_bins.py \
   --build-dir .pio/build/esp32dev_station \
-  --output-dir dist/station --version 0.3.0 --variant station
+  --output-dir dist/station --version 0.3.1 --variant station
 python scripts/build_release_bins.py \
   --build-dir .pio/build/esp32dev_tester \
-  --output-dir dist/tester --version 0.3.0 --variant tester
+  --output-dir dist/tester --version 0.3.1 --variant tester
 ```
 `--variant` を省略すると従来（v0.1.x）の `esp32-devkitc-firmware-*.bin` / `flash-manifest.json` という名前で出力します。生成後はオフセットと SHA-256 が自動検証され、`--verify-only --variant station` で再検証だけ行えます。
 
 ### バージョンの埋め込み
-`FW_VERSION=0.3.0 pio run -e esp32dev_station` のように環境変数で指定します。未指定時は `src/app_config.h` の既定値（`0.3.0`）が使われます。
+`FW_VERSION=0.3.1 pio run -e esp32dev_station` のように環境変数で指定します。未指定時は `src/app_config.h` の既定値（`0.3.1`）が使われます。
 
 ### CI / Release
 `.github/workflows/release-firmware.yml`（`docs/ci/release-firmware.yml` と同一）が以下を実行します。
