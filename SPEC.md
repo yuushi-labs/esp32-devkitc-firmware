@@ -79,12 +79,16 @@ I2C は 100 kHz。`Wire.setTimeOut(50)` で未接続デバイスによるブロ�
   - Wi-Fi 接続＋NTP 同期済み: `timestamp` に `YYYY-MM-DD HH:MM:SS`（JST `UTC+9`）を記録
   - 未同期時: `timestamp` は空欄または `uptime_ms` のみ記録し、列数は固定
 - 記録間隔: `10s / 60s / 300s` を `PSH` で切替、`CON` 短押しで手動記録、長押しで記録 ON/OFF
+  - v0.2.0 の 4 列形式の `/log.csv` が残っている場合は、起動時に `/log-v020.csv` へ退避して新しい 5 列ファイルを開始する（1 ファイル内で列構成を混ぜない）
 - マニフェストの `filesystems` にパーティション情報を記載し、`esp32-devkitc-flasher` の吸い出し機能と互換を保つ
 
 ### 4.4 🌐 Wi-Fi ＆ Web ダッシュボード
 - **初回 Wi-Fi 設定（AP モード / Captive Portal）**:
-  - NVS（`Preferences`）に SSID が未保存の場合、またはユーザーが「Wi-Fi 設定モード」を選んだ場合、AP（例: `ESP32-Station-Setup`）を起動
-  - スマホで接続して `http://192.168.4.1/`（またはリダイレクト）を開くと、周辺 SSID スキャン一覧から選んでパスワードを入力・保存し、通常モードへ再接続できる
+  - NVS（`Preferences`）に SSID が未保存の場合、またはユーザーが「Wi-Fi 設定モード」を選んだ場合、AP（`ESP32-Station-AP`）を起動
+  - AP は **WPA2-PSK** で、キーは起動ごとに生成して OLED の Wi-Fi 画面に表示する（設定中のパスワード送信経路を周囲に開放しないため）。スマホでそのキーで接続して `http://192.168.4.1/`（またはリダイレクト）を開くと、周辺 SSID スキャン一覧から選んでパスワードを入力・保存し、通常モードへ再接続できる
+  - 周辺 SSID のスキャンは非同期に行い、設定ページの応答や他機能を止めない
+  - 設定フォームは使い捨てトークンを持ち、`/save` は「AP モード中」かつ「そのトークン付き」の要求だけを受け付ける。保存済みネットワーク接続中は `/setup` からの変更不可（デバイスで `PSH` または `wifi ap` を押して AP モードに入る）。`PSH` をもう一度押すと保存済みネットワークへ戻る
+  - NVS への保存は SSID とパスワードを一組として扱い、途中で失敗した場合は前の値に戻す
 - **Web ダッシュボード（`http://<ESP32のIP>/`）**:
   - 外部 CDN に依存しない軽量 HTML/CSS/SVG で完結（オフライン LAN でも動作）
   - リアルタイム温湿度・気圧・不快指数表示（自動ポーリング）
@@ -94,7 +98,8 @@ I2C は 100 kHz。`Wire.setTimeOut(50)` で未接続デバイスによるブロ�
   - `GET /api/logs`: 直近の履歴データ（JSON 配列）
   - Raspberry Pi や他アプリからも連携しやすい構成
 - **OLED QR コード表示**:
-  - Wi-Fi 接続中、Web ページの「QR 表示」を開くと `http://<IP>/` の QR コードを 128x64 OLED に描画し、スマホのカメラで読み取るだけで即開ける
+  - Wi-Fi 接続中に Wi-Fi 画面で `CON` を押すか、Web ダッシュボードの「Show QR on OLED」を押すと `http://<IP>/` の QR コードを 128x64 OLED に描画し、スマホのカメラで読み取るだけで即開ける
+  - 白地に黒モジュール、1 モジュール 2 px（25 モジュールで 50 px ≒ 10 mm 四方）。パネルの白地がクワイエットゾーンを兼ねる。1 px 未満にしかならない場合は描画せず URL を表示する
 
 ### 4.5 📶 Bluetooth（BLE）2 機能
 - Flash / RAM 節約のため **NimBLE**（または軽量 BLE 構成）を採用する
@@ -116,7 +121,7 @@ I2C は 100 kHz。`Wire.setTimeOut(50)` で未接続デバイスによるブロ�
 
 ### 4.7 シリアルコマンド（station）
 - 既存: `scan`, `sensors`, `log`, `log on`, `log off`, `log now`, `log clear`, `page`, `page 1..N`
-- 追加: `wifi status`, `wifi ap`, `wifi clear`, `ble status`, `ble hid on|off`, `timer <min>`, `mode <name>`
+- 追加: `wifi status`, `wifi ap`, `wifi station`, `wifi clear`, `ble status`, `ble hid on|off`, `timer <min>`, `timer start|pause|reset`, `mode <name>`
 
 ## 5. 🧪 tester（パーツ動作確認）
 v0.2.0 の仕様をそのまま維持する（I2C 全スキャン・BMP280/DHT テスト・エンコーダ/ボタン導通テスト・シリアル `scan/sensors/inputs`）。

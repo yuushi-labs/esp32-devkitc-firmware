@@ -221,12 +221,72 @@ void test_page_commands_carry_the_page_number() {
 
   TEST_ASSERT_EQUAL_UINT8(1, fw::parseCommand("PAGE 1").page);
   TEST_ASSERT_EQUAL_UINT8(4, fw::parseCommand("page 4").page);
+  TEST_ASSERT_EQUAL_UINT8(5, fw::parseCommand("page 5").page);
+  TEST_ASSERT_EQUAL_UINT8(6, fw::parseCommand("page 6").page);
 
   assertCommand(CommandType::kUnknown, "page 0");
-  assertCommand(CommandType::kUnknown, "page 5");
+  assertCommand(CommandType::kUnknown, "page 7");
   assertCommand(CommandType::kUnknown, "page 12");
   assertCommand(CommandType::kUnknown, "page x");
   assertCommand(CommandType::kUnknown, "page 2 3");
+}
+
+void test_wifi_commands_parse() {
+  assertCommand(CommandType::kWifiStatus, "wifi");
+  assertCommand(CommandType::kWifiStatus, "WIFI status");
+  assertCommand(CommandType::kWifiAp, "wifi ap");
+  assertCommand(CommandType::kWifiClear, "wifi CLEAR");
+  assertCommand(CommandType::kUnknown, "wifi maybe");
+  assertCommand(CommandType::kUnknown, "wifi ap now");
+}
+
+void test_ble_commands_parse() {
+  assertCommand(CommandType::kBleStatus, "ble");
+  assertCommand(CommandType::kBleStatus, "BLE status");
+  assertCommand(CommandType::kBleHidOn, "ble hid on");
+  assertCommand(CommandType::kBleHidOff, "ble HID OFF");
+  assertCommand(CommandType::kUnknown, "ble hid");
+  assertCommand(CommandType::kUnknown, "ble hid toggle");
+  assertCommand(CommandType::kUnknown, "ble on");
+}
+
+void test_timer_commands_parse() {
+  assertCommand(CommandType::kTimerStatus, "timer");
+  assertCommand(CommandType::kTimerStart, "timer start");
+  assertCommand(CommandType::kTimerPause, "timer pause");
+  assertCommand(CommandType::kTimerPause, "timer stop");
+  assertCommand(CommandType::kTimerReset, "timer reset");
+
+  const fw::Command set = fw::parseCommand("timer 25");
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(CommandType::kTimerSet),
+                        static_cast<int>(set.type));
+  TEST_ASSERT_EQUAL_UINT8(25, set.timerMinutes);
+  TEST_ASSERT_EQUAL_UINT8(1, fw::parseCommand("timer 1").timerMinutes);
+  TEST_ASSERT_EQUAL_UINT8(60, fw::parseCommand("timer 60").timerMinutes);
+
+  assertCommand(CommandType::kUnknown, "timer 0");
+  assertCommand(CommandType::kUnknown, "timer 61");
+  assertCommand(CommandType::kUnknown, "timer 5x");
+  assertCommand(CommandType::kUnknown, "timer 5 6");
+}
+
+void test_mode_commands_parse() {
+  assertCommand(CommandType::kModeStatus, "mode");
+  assertCommand(CommandType::kModeStatus, "MODE");
+
+  const fw::Command select = fw::parseCommand("mode wifi");
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(CommandType::kModeSelect),
+                        static_cast<int>(select.type));
+  TEST_ASSERT_EQUAL_STRING("wifi", select.mode);
+
+  const fw::Command menu = fw::parseCommand("mode MENU");
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(CommandType::kModeSelect),
+                        static_cast<int>(menu.type));
+  TEST_ASSERT_EQUAL_STRING("menu", menu.mode);
+
+  assertCommand(CommandType::kUnknown, "mode wifi extra");
+  assertCommand(CommandType::kUnknown,
+                "mode aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
 }
 
 void test_help_text_lists_the_commands_of_each_firmware() {
@@ -235,7 +295,11 @@ void test_help_text_lists_the_commands_of_each_firmware() {
   TEST_ASSERT_NOT_NULL(std::strstr(station, "sensors"));
   TEST_ASSERT_NOT_NULL(std::strstr(station, "log on"));
   TEST_ASSERT_NOT_NULL(std::strstr(station, "log clear"));
-  TEST_ASSERT_NOT_NULL(std::strstr(station, "page 1..4"));
+  TEST_ASSERT_NOT_NULL(std::strstr(station, "page 1..6"));
+  TEST_ASSERT_NOT_NULL(std::strstr(station, "wifi ap"));
+  TEST_ASSERT_NOT_NULL(std::strstr(station, "ble hid"));
+  TEST_ASSERT_NOT_NULL(std::strstr(station, "timer"));
+  TEST_ASSERT_NOT_NULL(std::strstr(station, "mode NAME"));
   TEST_ASSERT_NULL(std::strstr(station, "inputs"));
 
   const char* tester = fw::commandHelpText(fw::FirmwareTarget::kTester);
@@ -273,6 +337,10 @@ int main(int argc, char** argv) {
   RUN_TEST(test_hardware_commands_parse);
   RUN_TEST(test_log_commands_parse_with_their_argument);
   RUN_TEST(test_page_commands_carry_the_page_number);
+  RUN_TEST(test_wifi_commands_parse);
+  RUN_TEST(test_ble_commands_parse);
+  RUN_TEST(test_timer_commands_parse);
+  RUN_TEST(test_mode_commands_parse);
   RUN_TEST(test_help_text_lists_the_commands_of_each_firmware);
   return UNITY_END();
 }

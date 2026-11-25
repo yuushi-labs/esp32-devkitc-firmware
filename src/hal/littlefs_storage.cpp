@@ -68,4 +68,30 @@ bool LittleFsLogStorage::removeFile() {
   return LittleFS.remove(path_);
 }
 
+size_t LittleFsLogStorage::readHeaderLine(char* out, size_t outSize) {
+  if (out == nullptr || outSize == 0) {
+    return 0;
+  }
+  out[0] = '\0';
+  File file = LittleFS.open(path_, FILE_READ);
+  if (!file) {
+    return 0;
+  }
+  const size_t read = file.readBytesUntil('\n', out, outSize - 1);
+  file.close();
+  out[read] = '\0';
+  return read;
+}
+
+bool LittleFsLogStorage::renameFile(const char* newPath) {
+  if (newPath == nullptr || !LittleFS.exists(path_)) {
+    return false;
+  }
+  // Replace an older copy so a second upgrade cannot fail on the name.
+  if (LittleFS.exists(newPath)) {
+    LittleFS.remove(newPath);
+  }
+  return LittleFS.rename(path_, newPath);
+}
+
 }  // namespace fw

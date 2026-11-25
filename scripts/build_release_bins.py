@@ -1,21 +1,30 @@
 #!/usr/bin/env python3
 """Build the release binaries for esp32-devkitc-firmware.
 
-Takes the PlatformIO build output for the ``esp32dev`` environment and produces
-the three assets consumed by the Android flasher:
+Takes the PlatformIO build output for ``esp32dev_station`` (or
+``esp32dev_tester`` with ``--variant tester``) and produces the assets consumed
+by the Android flasher:
 
-* ``esp32-devkitc-firmware-merged.bin`` - bootloader + partitions + boot_app0 +
-  firmware merged into one image based at 0x0000
-* ``esp32-devkitc-firmware-app.bin``    - the application image (0x10000)
-* ``flash-manifest.json``               - offsets, sizes, SHA-256 and version info
+* ``esp32-devkitc-<variant>-merged.bin`` - bootloader + partitions + boot_app0
+  + firmware merged into one image based at 0x0000
+* ``esp32-devkitc-<variant>-app.bin``    - the application image (0x10000)
+* ``flash-manifest.json`` (plus ``tester-flash-manifest.json`` for the tester)
+  - offsets, sizes, SHA-256 and version info
 
 The merge is byte-for-byte equivalent to ``esptool.py merge_bin`` with the
 standard ESP32 layout and the default 0xFF fill, implemented here without extra
 dependencies so it also runs on a bare CI runner.
 
+The station manifest also advertises the LittleFS data partition parsed from
+``no_ota.csv`` so the flasher can pull ``/log.csv`` back out.
+
 Usage:
-    python scripts/build_release_bins.py --build-dir .pio/build/esp32dev \
-        --output-dir dist --version 0.1.0
+    python scripts/build_release_bins.py \
+        --build-dir .pio/build/esp32dev_station --output-dir dist --version 0.3.0 \
+        --variant station
+    python scripts/build_release_bins.py \
+        --build-dir .pio/build/esp32dev_tester --output-dir dist \
+        --version 0.3.0 --variant tester
     python scripts/build_release_bins.py --verify-only --output-dir dist
 
 ``pins.json`` (repository root, or ``--pins PATH``) is validated and embedded
@@ -81,21 +90,22 @@ VARIANTS: dict[str | None, VariantNaming] = {
     ),
 }
 
-# The station firmware logs CSV samples to LittleFS on the standard
-# `default.csv` spiffs partition, so the Android flasher can pull that image
-# back out and read /log.csv.
+# The station firmware logs CSV samples to LittleFS in the data partition of
+# no_ota.csv, so the Android flasher can pull that image back out and read
+# /log.csv. The offset and size are parsed from the partition table at build
+# time; this tuple is only the fallback for a checkout without no_ota.csv.
 STATION_FILESYSTEMS = (
     {
         "type": "littlefs",
         "label": "spiffs",
-        "offset": "0x290000",
-        "size": 0x160000,
+        "offset": "0x210000",
+        "size": 0x1E0000,
         "mountPoint": "/littlefs",
         "format": "csv",
         "logFile": "/log.csv",
         "notes": (
-            "default.csv の spiffs パーティション。station ファームが "
-            "/log.csv (uptime_ms,temp_c,pressure_hpa,humidity_pct) を追記する"
+            "no_ota.csv の spiffs パーティション。station ファームが "
+            "/log.csv (timestamp,uptime_ms,temp_c,pressure_hpa,humidity_pct) を追記する"
         ),
     },
 )
@@ -113,11 +123,131 @@ SEGMENTS = (
 
 APP_OFFSET = 0x10000
 
+# 4 MB flash on the ESP32-DevKitC; a partition block that runs past it would
+# point the flasher at a region that does not exist.
+FLASH_SIZE_BYTES = 4 * 1024 * 1024
+
 DEFAULT_VERSION = "0.0.0-dev"
 
 # pins.json lives at the repository root; the firmware embeds the same file.
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_PINS_PATH = PROJECT_ROOT / "pins.json"
+DEFAULT_PARTITION_CSV = PROJECT_ROOT / "no_ota.csv"
+
+
+@dataclass(frozen=True)
+class PartitionEntry:
+    name: str
+    type: str
+    subtype: str
+    offset: int
+    size: int
+
+
+def parse_partition_number(text: str) -> int:
+    """Parse an ESP-IDF partition size/offset.
+
+    The CSV format accepts decimal, ``0x`` hexadecimal and ``K``/``M`` suffixes
+    (``spiffs,data,spiffs,2162688,1966080,`` and ``app0,app,ota_0,0x10000,2M,``
+    both work), so the manifest must not read every value as hexadecimal.
+    """
+    value = text.strip()
+    if not value:
+        raise ValueError("empty number")
+    multiplier = 1
+    suffix = value[-1]
+    if suffix in ("k", "K"):
+        multiplier = 1024
+        value = value[:-1]
+    elif suffix in ("m", "M"):
+        multiplier = 1024 * 1024
+        value = value[:-1]
+    if not value:
+        raise ValueError("missing digits")
+    if value.lower().startswith("0x"):
+        number = int(value, 16)
+    else:
+        number = int(value, 10)
+    return number * multiplier
+
+
+def align_up(value: int, alignment: int) -> int:
+    return (value + alignment - 1) // alignment * alignment
+
+
+def load_partition_table(path: Path) -> list[PartitionEntry]:
+    """Parse a PlatformIO/ESP-IDF partition CSV (comments and blanks skipped)."""
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError as exc:
+        raise SystemExit(f"error: cannot read partition table {path}: {exc}") from exc
+
+    entries: list[PartitionEntry] = []
+    for number, raw in enumerate(lines, start=1):
+        line = raw.split("#", 1)[0].strip()
+        if not line:
+            continue
+        fields = [field.strip() for field in line.split(",")]
+        if len(fields) < 5:
+            raise SystemExit(
+                f"error: {path}:{number}: expected at least 5 fields, got {len(fields)}"
+            )
+        name, part_type, subtype, offset, size = fields[:5]
+        try:
+            size_bytes = parse_partition_number(size)
+            if offset.strip():
+                offset_bytes = parse_partition_number(offset)
+            else:
+                # ESP-IDF allows an empty offset and fills it with the end of the
+                # previous partition, aligned to 4 KB.
+                previous_end = entries[-1].offset + entries[-1].size if entries else 0x9000
+                offset_bytes = align_up(previous_end, 0x1000)
+            entries.append(
+                PartitionEntry(name, part_type, subtype, offset_bytes, size_bytes)
+            )
+        except ValueError as exc:
+            raise SystemExit(f"error: {path}:{number}: {exc}") from exc
+    return entries
+
+
+def station_filesystems(partition_csv: Path | None = None) -> list[dict]:
+    """LittleFS/SPIFFS data partition advertised in the station manifest.
+
+    Without a readable partition table the fixed v0.2.0 layout is the only
+    information available, so it is used as a compatibility fallback. As soon as
+    the table can be read it is the single source of truth: a table without a
+    data partition advertises no filesystem at all, because a manifest that
+    points the flasher at a region the table does not define would offer to read
+    a ``/log.csv`` that cannot exist.
+    """
+    path = partition_csv if partition_csv is not None else DEFAULT_PARTITION_CSV
+    if not path.is_file():
+        return [dict(entry) for entry in STATION_FILESYSTEMS]
+
+    entries = [
+        entry
+        for entry in load_partition_table(path)
+        if entry.type == "data" and entry.subtype in ("spiffs", "littlefs")
+    ]
+    if not entries:
+        return []
+
+    return [
+        {
+            "type": "littlefs",
+            "label": entry.name,
+            "offset": hex(entry.offset),
+            "size": entry.size,
+            "mountPoint": "/littlefs",
+            "format": "csv",
+            "logFile": "/log.csv",
+            "notes": (
+                f"{path.name} の {entry.name} パーティション。station ファームが "
+                "/log.csv (timestamp,uptime_ms,temp_c,pressure_hpa,humidity_pct) を追記する"
+            ),
+        }
+        for entry in entries
+    ]
 
 
 def sha256_bytes(data: bytes) -> str:
@@ -241,6 +371,7 @@ def build_release(
     boot_app0_path: Path | None = None,
     pin_document: dict | None = None,
     variant: str | None = None,
+    partition_csv: Path | None = None,
 ) -> dict:
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -309,7 +440,9 @@ def build_release(
         manifest["variant"] = naming.key
         manifest["variantLabel"] = naming.label
     if variant == "station":
-        manifest["filesystems"] = [dict(entry) for entry in STATION_FILESYSTEMS]
+        filesystems = station_filesystems(partition_csv)
+        if filesystems:
+            manifest["filesystems"] = filesystems
 
     # Pin wiring (pins.json) is optional so manifests produced before it existed
     # keep exactly the same shape.
@@ -402,7 +535,8 @@ def verify_release(output_dir: Path, manifest_name: str = MANIFEST_FILENAME) -> 
                 )
 
     # A station manifest advertises the LittleFS partition so the flasher can
-    # offer to read /log.csv back; a malformed block would break that offer.
+    # offer to read /log.csv back; a malformed block would break that offer, and
+    # a region outside the flash would make it offer the impossible.
     if "filesystems" in manifest:
         filesystems = manifest["filesystems"]
         if not isinstance(filesystems, list) or not filesystems:
@@ -416,9 +550,18 @@ def verify_release(output_dir: Path, manifest_name: str = MANIFEST_FILENAME) -> 
                     if key not in entry:
                         problems.append(f"filesystems[{index}]: missing {key}")
                 try:
-                    int(str(entry.get("offset")), 16)
+                    offset = int(str(entry.get("offset")), 16)
                 except (TypeError, ValueError):
                     problems.append(f"filesystems[{index}]: bad offset")
+                    continue
+                size = entry.get("size")
+                if not isinstance(size, int) or size <= 0:
+                    problems.append(f"filesystems[{index}]: bad size")
+                elif offset + size > FLASH_SIZE_BYTES:
+                    problems.append(
+                        f"filesystems[{index}]: {entry.get('offset')} + {size} "
+                        f"exceeds the {FLASH_SIZE_BYTES} byte flash"
+                    )
 
     # The pin block is optional, but when it is present it must stay valid and
     # the wiring notes must be displayable strings. Check the key, not the

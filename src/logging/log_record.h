@@ -13,6 +13,8 @@
 namespace fw {
 
 struct LogSample {
+  // "YYYY-MM-DD HH:MM:SS" in local time, empty until NTP has synced.
+  char timestamp[20] = {0};
   uint32_t uptimeMs = 0;
   bool hasTemperature = false;
   float temperatureC = 0.0f;
@@ -25,13 +27,26 @@ struct LogSample {
 // Builds a sample from the latest sensor values.
 LogSample makeLogSample(const SensorSnapshot& snapshot, uint32_t uptimeMs);
 
-// "uptime_ms,temp_c,pressure_hpa,humidity_pct"
-constexpr const char* kLogHeaderLine = "uptime_ms,temp_c,pressure_hpa,humidity_pct";
+// "timestamp,uptime_ms,temp_c,pressure_hpa,humidity_pct"
+constexpr const char* kLogHeaderLine =
+    "timestamp,uptime_ms,temp_c,pressure_hpa,humidity_pct";
+
+// Where a v0.2.0 (four column) log is moved before the new five column file is
+// started: rows of both layouts must never share one CSV.
+constexpr const char* kLegacyLogPath = "/log-v020.csv";
 
 // Both always NUL terminate and return the untruncated length (snprintf
 // semantics), including the trailing newline.
 size_t formatLogHeader(char* out, size_t outSize);
 size_t formatLogLine(const LogSample& sample, char* out, size_t outSize);
+
+// True for the CSV header row (either layout).
+bool isLogHeaderLine(const char* line);
+// True when `line` is exactly the current five column header.
+bool isCurrentLogHeader(const char* line);
+// Parses one data row. Accepts the v0.2.0 four column layout as well, so an
+// existing /log.csv still shows up in /api/logs.
+bool parseLogLine(const char* line, LogSample* out);
 
 // "10 s" / "1 min" / "5 min" style label for the display.
 size_t formatIntervalLabel(uint32_t intervalMs, char* out, size_t outSize);
@@ -50,6 +65,10 @@ class LogStorage {
   virtual uint32_t countDataLines() = 0;
   virtual uint32_t fileSize() = 0;
   virtual bool removeFile() = 0;
+  // First line of the log (the CSV header), empty when there is no log yet.
+  virtual size_t readHeaderLine(char* out, size_t outSize) = 0;
+  // Moves the log to `newPath` so an old layout can be kept aside.
+  virtual bool renameFile(const char* newPath) = 0;
 };
 
 class LogRecorder {
@@ -67,6 +86,7 @@ class LogRecorder {
   size_t intervalIndex() const { return intervalIndex_; }
   uint32_t intervalMs() const;
   void nextInterval();
+  void previousInterval();
 
   // True when a new sample is due at `nowMs` (enabled and one interval passed
   // since the last attempt, so a failing write is not retried on every loop).
@@ -84,6 +104,7 @@ class LogRecorder {
   uint32_t recordCount() const { return recordCount_; }
   uint32_t fileSize() const { return fileSize_; }
   bool lastWriteOk() const { return lastWriteOk_; }
+  bool migrationFailed() const { return migrationFailed_; }
 
  private:
   bool appendLine(const char* line);
@@ -95,6 +116,9 @@ class LogRecorder {
   size_t intervalIndex_ = 0;
   bool storageReady_ = false;
   bool headerReady_ = false;
+  // The old file could not be moved aside: refuse to write until a later boot
+  // manages the migration, instead of appending to a file of the old layout.
+  bool migrationFailed_ = false;
   bool enabled_ = true;
   bool lastWriteOk_ = false;
   bool hasAttempted_ = false;

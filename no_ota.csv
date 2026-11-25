@@ -1,0 +1,15 @@
+# Partition table for the v0.3.0 multi-function station (Wi-Fi + BLE, no OTA).
+#
+# The Wi-Fi stack, the web server and NimBLE grow the application past the
+# 1.25 MB app slot of default.csv, so this table gives the app 2 MB and keeps a
+# large LittleFS/SPIFFS data partition for /log.csv. OTA is not used: firmware
+# updates go through USB with the Android flasher.
+#
+# scripts/build_release_bins.py reads this file to publish the LittleFS offset
+# and size in flash-manifest.json, so the flasher can pull /log.csv back out.
+# Name,   Type, SubType, Offset,  Size,     Flags
+nvs,      data, nvs,     0x9000,  0x5000,
+otadata,  data, ota,     0xe000,  0x2000,
+app0,     app,  ota_0,   0x10000, 0x200000,
+spiffs,   data, spiffs,  0x210000, 0x1E0000,
+coredump, data, coredump, 0x3F0000, 0x10000,

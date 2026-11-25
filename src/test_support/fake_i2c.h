@@ -129,9 +129,36 @@ class FakeLogStorage : public LogStorage {
     return true;
   }
 
+  size_t readHeaderLine(char* out, size_t outSize) override {
+    if (out == nullptr || outSize == 0) {
+      return 0;
+    }
+    out[0] = '\0';
+    if (content.empty()) {
+      return 0;
+    }
+    const size_t end = content.find('\n');
+    const std::string line = content.substr(0, end);
+    const size_t length = line.size() < outSize - 1 ? line.size() : outSize - 1;
+    std::memcpy(out, line.data(), length);
+    out[length] = '\0';
+    return length;
+  }
+
+  bool renameFile(const char* newPath) override {
+    if (!mountOk || newPath == nullptr || failRename) {
+      return false;
+    }
+    renamedTo = newPath;
+    content.clear();
+    return true;
+  }
+
   bool mountOk = true;
   bool failWrites = false;
+  bool failRename = false;
   std::string content;
+  std::string renamedTo;
 };
 
 }  // namespace test

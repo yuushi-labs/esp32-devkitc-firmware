@@ -38,6 +38,21 @@ enum class CommandType {
   kPageNext,
   kPagePrev,
   kPageSelect,
+  // Station v0.3.0: Wi-Fi, BLE, timer and mode navigation.
+  kWifiStatus,
+  kWifiAp,
+  kWifiStation,
+  kWifiClear,
+  kBleStatus,
+  kBleHidOn,
+  kBleHidOff,
+  kTimerStatus,
+  kTimerSet,
+  kTimerStart,
+  kTimerPause,
+  kTimerReset,
+  kModeStatus,
+  kModeSelect,
   kUnknown,
 };
 
@@ -47,6 +62,10 @@ struct Command {
   LedMode ledMode = LedMode::kBlink;
   // 1 based page number for kPageSelect.
   uint8_t page = 0;
+  // Minutes for kTimerSet (1..60).
+  uint8_t timerMinutes = 0;
+  // Mode name for kModeSelect, already lower cased.
+  char mode[16] = {0};
 };
 
 // Accepts '\n' terminated lines, tolerates a trailing '\r', and reports

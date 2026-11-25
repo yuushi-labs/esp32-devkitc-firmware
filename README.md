@@ -4,16 +4,18 @@ ESP32-DevKitC 向けのファームウェアリポジトリです。1 つのコ�
 
 | ターゲット | PlatformIO 環境 | 用途 |
 | --- | --- | --- |
-| 🎛️ `station`（環境ステーション） | `esp32dev_station` | OLED に温度・気圧・湿度・記録状態を表示し、エンコーダ／ボタンでページ操作。LittleFS に `/log.csv` を記録 |
-| 🧪 `tester`（パーツ動作確認） | `esp32dev_tester` | I2C バス全スキャン、BMP280 / DHT の応答確認、エンコーダ・3 ボタンの導通を OLED とシリアルにリアルタイム表示 |
+| 🎛️ `station`（多機能環境ステーション） | `esp32dev_station` | 温度・気圧・湿度・不快指数の表示、OLED ミニグラフ、NTP 時刻付き LittleFS 記録、Wi-Fi Web ダッシュボード＆QR、BLE センサー配信＆メディアリモコン、物理タイマー／ポモドーロ |
+| 🧪 `tester`（パーツ動作確認） | `esp32dev_tester` | I2C バス全スキャン、BMP280 / DHT の応答確認、エンコーダ・3 ボタンの導通を OLED とシリアルにリアルタイム表示（v0.2.0 相当） |
 
-`tester` で配線とパーツを確認してから `station` を書き込む、という使い方を想定しています。
+v0.3.0 でも **配線は v0.2.0 から変更ありません**（`pins.json` もそのまま）。`tester` で配線とパーツを確認してから `station` を書き込む、という使い方を想定しています。
 
 ## ターゲット環境
 - **ボード**: ESP32-DevKitC（`esp32dev` / 無印 ESP32、4MB フラッシュ）
 - **ビルドシステム**: PlatformIO（`espressif32@6.9.0`、Arduino framework）
 - **シリアル通信**: 115200 bps
-- **外部ライブラリ**: なし（OLED・BMP280 ドライバは本リポジトリ内で実装）
+- **外部ライブラリ**: [`h2zero/NimBLE-Arduino`](https://github.com/h2zero/NimBLE-Arduino)（BLE 用）のみ。OLED・BMP280・DHT・QR コードは本リポジトリ内で実装
+- **パーティション**: `no_ota.csv`（app 2MB + LittleFS 約 1.9MB）。Wi-Fi + Web サーバー + BLE を同時に積むと `default.csv` の 1.25MB アプリ枠に収まらないため、OTA を外してアプリ領域を広げています。書き込みは USB 経由の Android アプリで行います
+- **バージョン**: `src/app_config.h` の既定値は `0.3.0`。リリースビルドでは `FW_VERSION` で上書きします
 
 ## ハードウェア構成
 
@@ -71,40 +73,69 @@ ESP32-DevKitC 向けのファームウェアリポジトリです。1 つのコ�
 - 5 秒ごとの `heartbeat uptime_ms=... free_heap=... led_mode=...`
 - 共通コマンド: `help` / `ping` / `info` / `pinout` / `led on|off|blink`
 
-## 🎛️ station（環境ステーション）
+## 🎛️ station（多機能環境ステーション）
 
-### 画面（エンコーダ回転で切替）
-1. **現在値サマリー**: 温度（大きく表示）・気圧・湿度・記録中かどうかと次回記録まで
-2. **BMP280 詳細**: チップ名とアドレス・温度・気圧・気圧トレンド（rising / steady / falling）・DHT の値・ポーリング周期
-3. **LittleFS ログ管理**: 記録 ON/OFF・件数・記録間隔・次回まで・ファイルサイズ・`/log.csv`
-4. **システム / I2C 状態**: ファームバージョン・稼働時間・空きヒープ・I2C で見つかったアドレス・OLED・BMP280・ログ
+ホームメニューをエンコーダで選び、`CON` または `PSH` で入ります。どのモードからでも `BAK` 長押しでホームへ戻れます。
 
-### ボタン操作
-| 操作 | 動作 |
-| --- | --- |
-| エンコーダ回転 | ページ送り / 戻し |
-| `PSH` 押し込み | 記録間隔を切替（10 秒 → 1 分 → 5 分） |
-| `BAK` | 前のページ |
-| `CON` 短押し | 手動で 1 件記録 |
-| `CON` 長押し（0.9 秒） | 記録 ON / OFF |
+| # | モード | 内容 |
+| --- | --- | --- |
+| 1 | 📊 環境モニター | 温度（BMP280 優先、未接続時は DHT）・気圧・湿度・不快指数・天気傾向・記録状態。`CON` でサマリー → グラフ → 詳細を切替 |
+| 2 | 📁 ログ管理 | NTP 時刻付き CSV の ON/OFF、記録間隔、件数、次回まで、ファイルサイズ |
+| 3 | 🌐 Wi-Fi ＆ Web | 接続状態・IP・RSSI・NTP 時刻。未設定時は AP 設定モード。`CON` で QR コード表示 |
+| 4 | 📶 Bluetooth | GATT センサー配信とメディアリモコン（HID）モードの切替・接続状態 |
+| 5 | ⏱️ タイマー | 1〜60 分カウントダウン／ポモドーロ（25 分作業・5 分休憩） |
+| 6 | 🛠️ システム | バージョン・稼働時間・空きヒープ・I2C アドレス・OLED・Wi-Fi・BLE・ログ状態 |
+
+### 環境モニター
+- 温度が 2 倍角フォントで大きく表示され、気圧・湿度・不快指数・天気傾向（sunny / cloudy / rain）を 1 画面にまとめます
+- グラフ画面は直近 64 サンプル（10 秒間隔）の温度・気圧を 2 本のミニ折れ線で描画します
+- 詳細画面は BMP280 のチップ名・アドレス、気圧トレンド、DHT の値、不快指数を表示します
+- しきい値アラート: 高温 **30℃ 以上**、乾燥 **35% 以下**、気圧急変 **1.5 hPa 以上**。画面に `! HOT31.0 DRY30 PJMP` のように表示し、オンボード LED を高速点滅します
+
+### ボタン操作（モード別）
+| 操作 | 環境モニター | ログ | Wi-Fi | BLE（HID モード） | タイマー |
+| --- | --- | --- | --- | --- | --- |
+| エンコーダ回転 | サマリー↔グラフ↔詳細 | — | — | 音量 UP / DOWN | 1〜60 分を調整（停止中のみ） |
+| `PSH` | 次の表示 | 記録間隔を切替（10 秒→1 分→5 分） | AP 設定モードを開始 | 再生 / 一時停止 | ポモドーロ切替 |
+| `CON` 短押し | 次の表示 | 手動で 1 件記録 | QR コードを表示 | 次の曲 | 開始 / 一時停止 |
+| `BAK` 短押し | 前の表示 | 前の表示 | 前の表示 | 前の曲 | リセット |
+| `CON` 長押し（0.9 秒） | — | 記録 ON / OFF | — | — | — |
+| `BAK` 長押し（0.9 秒） | ホームへ | ホームへ | ホームへ | ホームへ | ホームへ |
+
+タイマーは 00:00 で OLED を反転点滅し、LED で通知します。
 
 ### LittleFS ログ
 - `LittleFS.begin(true)` でマウント（未フォーマットなら自動フォーマット）
-- `/log.csv` に `uptime_ms,temp_c,pressure_hpa,humidity_pct` を追記
-- 接続されていないセンサーの列は空欄（例: `1234,23.45,,`）になり、列数は常に一定
-- 1 行目はヘッダー。件数はヘッダーを除いた行数
-- `spiffs` パーティション（`default.csv` の `0x290000` / 1,441,792 B）を使うため、`esp32-devkitc-flasher` の LittleFS 吸い出しでそのまま `/log.csv` を読み出せます
+- `/log.csv` のヘッダーは `timestamp,uptime_ms,temp_c,pressure_hpa,humidity_pct`
+- Wi-Fi + NTP 同期時は `timestamp` に `YYYY-MM-DD HH:MM:SS`（JST `UTC+9`）を記録し、未同期時は空欄
+- 未接続センサーの列は空欄（例: `,1234,23.45,,`）になり、列数は常に一定
+- `no_ota.csv` の `spiffs` 領域（`0x210000` / 1,966,080 B）を使います。`esp32-devkitc-flasher` の LittleFS 吸い出しでそのまま `/log.csv` を読み出せます
+- v0.2.0 の 4 列ログが残っている場合は、起動時に `/log-v020.csv` へ退避してから新しい 5 列ファイルを始めます（同じファイルに 2 種類の列構成を混ぜません）
+
+### Wi-Fi ＆ Web ダッシュボード
+- **初回設定（AP モード）**: SSID `ESP32-Station-AP` は **WPA2 で保護**され、パスワードは起動ごとに生成されて OLED の Wi-Fi 画面に表示されます（周囲から設定用パスワードを盗み見られないようにするため）。接続して `http://192.168.4.1/` のフォームで周辺 SSID を選びパスワードを保存します。認証情報は NVS（`Preferences`）に保存され、次回起動時に自動接続します
+- **設定の変更は AP モードのみ**: 保存済みネットワークにつながっている間は `/setup` を開いても変更できません（デバイスの Wi-Fi 画面で `PSH`、または `wifi ap` で AP モードに入る必要があります）。設定フォームには使い捨てトークンが入り、`/save` はそのトークンと AP モードの両方を満たす要求だけを受け付けます
+- **ダッシュボード**: `http://<ESP32 の IP>/` に外部 CDN 非依存の HTML/CSS/JS を配信します。温湿度・気圧・不快指数・Wi-Fi/BLE/ログ/タイマー状態を自動更新し、履歴グラフ・`/log.csv` ダウンロード・ログ消去を提供します
+- **JSON API**: `GET /api/status`（現在値と各機能の状態）、`GET /api/logs`（直近 120 件の履歴）、`GET /download`（CSV）
+- **QR コード**: Wi-Fi モードで `CON` を押すか、ダッシュボードの「Show QR on OLED」を押すと `http://<IP>/` の QR コードを OLED に描画します（内蔵エンコーダ、ISO/IEC 18004 byte mode・version 1〜10）。128x64 パネルでは白地に黒モジュール・1 モジュール 2 px（約 10 mm 四方）で描き、パネル自体の余白をクワイエットゾーンにします。収まらない大きさのときは QR の代わりに URL を表示します
+- 未設定・切断時も環境モニター・ログ・BLE・タイマーはオフラインで動作し、Wi-Fi はブロッキングせずバックグラウンドで再接続します。設定ページの周辺 SSID スキャンも非同期で、ページ応答やボタン操作を止めません
+
+### Bluetooth（BLE）
+- **センサー配信**: デバイス名 `ESP32-EnvStation`。Environmental Sensing Service（`0x181A`）相当の温度・湿度・気圧特性と状態通知（2 秒間隔）を公開します
+- **メディアリモコン**: `ble hid on` または BLE 画面の `PSH` で有効化します。エンコーダ右/左 → 音量 UP/DOWN、`PSH` → 再生/一時停止、`CON` → 次の曲、`BAK` → 前の曲。HID レポートは 30ms で自動リリースします
+- BLE スタックは RAM/Flash の小さい NimBLE を使います
 
 ### シリアルコマンド（station）
 | コマンド | 動作 |
 | --- | --- |
 | `scan` | I2C バスを再スキャンして一覧表示 |
-| `sensors` | BMP280 / DHT の状態を表示 |
-| `log` | ログ状態（保存先・ON/OFF・間隔・件数・サイズ） |
-| `log on` / `log off` | 記録の開始 / 停止 |
-| `log now` | 手動で 1 件記録 |
-| `log clear` | `/log.csv` を削除してヘッダーだけ作り直す |
-| `page` / `page 1..4` | 次のページ / 指定ページへ |
+| `sensors` | BMP280 / DHT / 不快指数 / 天気傾向 / アラートを表示 |
+| `log` / `log on` / `log off` / `log now` / `log clear` | ログ状態の表示・開始・停止・手動記録・消去 |
+| `page` / `page 1..6` | 次のモード / 指定モードへ |
+| `mode` / `mode NAME` | 現在の画面・モード表示 / `env` `logs` `wifi` `ble` `timer` `system` `menu` を開く |
+| `wifi` / `wifi ap` / `wifi station` / `wifi clear` | Wi-Fi・NTP 状態 / AP 設定モード開始 / 保存済みネットワークへ再接続 / 保存済み認証情報を消去 |
+| `ble` / `ble hid on` / `ble hid off` | BLE 状態 / メディアリモコンモード ON・OFF |
+| `timer` / `timer N` / `timer start\|pause\|reset` | タイマー状態 / 1〜60 分設定 / 開始・一時停止・リセット |
 
 ## 🧪 tester（パーツ動作確認）
 
@@ -135,20 +166,22 @@ ESP32-DevKitC 向けのファームウェアリポジトリです。1 つのコ�
 | `esp32-devkitc-tester-app.bin` | tester のアプリ単体（`0x10000`） |
 | `tester-flash-manifest.json` | tester のマニフェスト |
 
-`flash-manifest.json` / `tester-flash-manifest.json` には `variant`（`station` / `tester`）と `variantLabel` が入ります。station のマニフェストだけは、書き込みアプリがログ領域を案内できるよう `filesystems` を持ちます。
+`flash-manifest.json` / `tester-flash-manifest.json` には `variant`（`station` / `tester`）と `variantLabel` が入ります。station のマニフェストだけは、書き込みアプリがログ領域を案内できるよう `filesystems` を持ちます。オフセットとサイズは `scripts/build_release_bins.py` が `no_ota.csv` から自動で読み取ります。
 
 ```json
 "filesystems": [
   {
     "type": "littlefs",
     "label": "spiffs",
-    "offset": "0x290000",
-    "size": 1441792,
+    "offset": "0x210000",
+    "size": 1966080,
     "mountPoint": "/littlefs",
     "logFile": "/log.csv"
   }
 ]
 ```
+
+> パーティションを変更するときは `no_ota.csv` と `platformio.ini` の `board_build.partitions` を揃えてください。マニフェストの `filesystems` は同じ CSV から生成されるため、手で書き換える必要はありません。
 
 > `esp32-devkitc-flasher` v0.2.0 以降はバリアント選択に対応します。それ以前のバージョンでは `flash-manifest.json`（station）が自動選択されるため、tester を書き込むときは Release の `.bin` を直接選んでください。
 
@@ -160,29 +193,29 @@ ESP32-DevKitC 向けのファームウェアリポジトリです。1 つのコ�
 
 ### ビルドとテスト
 ```bash
-pio test -e native                  # ホスト環境のユニットテスト（131 ケース）
-pio run -e esp32dev_station         # 環境ステーション
+pio test -e native                  # ホスト環境のユニットテスト（212 ケース）
+pio run -e esp32dev_station         # 多機能環境ステーション
 pio run -e esp32dev_tester          # パーツ動作確認
 pio run -e esp32dev_station -t upload
 pio device monitor                  # 115200 bps
-python3 -m unittest discover -s tests/python   # リリース生成・pins.json のテスト
+python3 -m unittest discover -s tests/python   # リリース生成・パーティション・pins.json のテスト
 ```
 
 ### リリース用バイナリの生成
 ```bash
-FW_VERSION=0.2.0 pio run -e esp32dev_station
-FW_VERSION=0.2.0 pio run -e esp32dev_tester
+FW_VERSION=0.3.0 pio run -e esp32dev_station
+FW_VERSION=0.3.0 pio run -e esp32dev_tester
 python scripts/build_release_bins.py \
   --build-dir .pio/build/esp32dev_station \
-  --output-dir dist/station --version 0.2.0 --variant station
+  --output-dir dist/station --version 0.3.0 --variant station
 python scripts/build_release_bins.py \
   --build-dir .pio/build/esp32dev_tester \
-  --output-dir dist/tester --version 0.2.0 --variant tester
+  --output-dir dist/tester --version 0.3.0 --variant tester
 ```
 `--variant` を省略すると従来（v0.1.x）の `esp32-devkitc-firmware-*.bin` / `flash-manifest.json` という名前で出力します。生成後はオフセットと SHA-256 が自動検証され、`--verify-only --variant station` で再検証だけ行えます。
 
 ### バージョンの埋め込み
-`FW_VERSION=0.2.0 pio run -e esp32dev_station` のように環境変数で指定します。未指定時は `src/app_config.h` の既定値（`0.2.0`）が使われます。
+`FW_VERSION=0.3.0 pio run -e esp32dev_station` のように環境変数で指定します。未指定時は `src/app_config.h` の既定値（`0.3.0`）が使われます。
 
 ### CI / Release
 `.github/workflows/release-firmware.yml`（`docs/ci/release-firmware.yml` と同一）が以下を実行します。
@@ -192,8 +225,6 @@ python scripts/build_release_bins.py \
 
 > **ワークフローを変更するときの注意**
 > GitHub App の権限では `.github/workflows/` への push が 403 で拒否されます。ワークフローを変えるときは `docs/ci/release-firmware.yml` を更新し、その内容をブラウザ（`@yuushi2024` のセッション）で `.github/workflows/release-firmware.yml` へ反映してください。v0.2.0 の 2 バリアント対応もこの手順で反映済みです（反映前のタグビルドは v0.1.x の単一ファームウェアのままでした）。
-
-`env:esp32dev` は v0.1.x のワークフローが使っていた後方互換エイリアス（station と同じ設定）で、v0.3.0 で削除予定です。
 
 ### 結合バイナリのレイアウト
 | オフセット | 内容 |
@@ -216,14 +247,17 @@ src/
 ├── i2c_transport.h           # I2C 抽象（実機とテストで共通）
 ├── i2c_helpers.cpp
 ├── i2c_scan.*                # バススキャンとデバイス判定
-├── sensors/                  # BMP280 ドライバ、DHT デコード、スナップショット
+├── ble/                      # BLE GATT/HID のプロトコル定義とエンコード（純C++）
+├── graphics/                 # QR コード生成・描画、ミニグラフ（純C++）
+├── net/                      # Wi-Fi 認証情報・フォーム解析、NTP 時計、Web ダッシュボード（純C++）
+├── sensors/                  # BMP280 ドライバ、DHT デコード、不快指数、スナップショット
 ├── display/                  # 5x7 フォント、フレームバッファ、SSD1306、ページ描画
 ├── input/                    # ロータリーエンコーダ、ボタン（デバウンス/長押し）
 ├── logging/                  # CSV フォーマットと記録状態（LogRecorder）
-├── station/                  # station のページ生成・状態機械・アプリ本体
+├── station/                  # station のページ生成・状態機械・タイマー・アラート・アプリ本体
 ├── tester/                   # tester のページ生成・レポート・アプリ本体
-├── hal/                      # Arduino 依存（Wire / DHT GPIO / LittleFS / GPIO 入力）
+├── hal/                      # Arduino 依存（Wire / DHT GPIO / LittleFS / GPIO 入力 / Wi-Fi / Web / BLE）
 └── test_support/             # テスト用フェイク（ファームウェアからは未使用）
 ```
 
-詳細は [SPEC.md](./SPEC.md) を参照してください。
+リポジトリ直下の `no_ota.csv` がパーティション定義（app 2MB + LittleFS 1.9MB）、`pins.json` が配線の唯一の情報源です。詳細は [SPEC.md](./SPEC.md) を参照してください。

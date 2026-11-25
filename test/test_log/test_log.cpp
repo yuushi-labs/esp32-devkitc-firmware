@@ -21,6 +21,7 @@ const uint32_t kIntervals[] = {10000, 60000, 300000};
 
 LogSample fullSample() {
   LogSample sample;
+  std::snprintf(sample.timestamp, sizeof(sample.timestamp), "2026-11-25 07:37:00");
   sample.uptimeMs = 1234;
   sample.hasTemperature = true;
   sample.temperatureC = 23.456f;
@@ -34,7 +35,7 @@ LogSample fullSample() {
 void test_header_is_stable() {
   char out[64];
   const size_t needed = fw::formatLogHeader(out, sizeof(out));
-  TEST_ASSERT_EQUAL_STRING("uptime_ms,temp_c,pressure_hpa,humidity_pct\n", out);
+  TEST_ASSERT_EQUAL_STRING("timestamp,uptime_ms,temp_c,pressure_hpa,humidity_pct\n", out);
   TEST_ASSERT_EQUAL_UINT32(static_cast<uint32_t>(std::strlen(out)),
                            static_cast<uint32_t>(needed));
   TEST_ASSERT_EQUAL_UINT32(static_cast<uint32_t>(std::strlen(fw::kLogHeaderLine)),
@@ -42,9 +43,9 @@ void test_header_is_stable() {
 }
 
 void test_line_formats_every_column() {
-  char out[96];
+  char out[128];
   const size_t needed = fw::formatLogLine(fullSample(), out, sizeof(out));
-  TEST_ASSERT_EQUAL_STRING("1234,23.46,1006.53,45.0\n", out);
+  TEST_ASSERT_EQUAL_STRING("2026-11-25 07:37:00,1234,23.46,1006.53,45.0\n", out);
   TEST_ASSERT_EQUAL_UINT32(static_cast<uint32_t>(std::strlen(out)),
                            static_cast<uint32_t>(needed));
 }
@@ -55,9 +56,9 @@ void test_missing_values_keep_the_columns_empty() {
   sample.hasTemperature = true;
   sample.temperatureC = 20.0f;
 
-  char out[96];
+  char out[128];
   fw::formatLogLine(sample, out, sizeof(out));
-  TEST_ASSERT_EQUAL_STRING("42,20.00,,\n", out);
+  TEST_ASSERT_EQUAL_STRING(",42,20.00,,\n", out);
 }
 
 void test_truncated_line_reports_the_needed_length() {
@@ -65,6 +66,58 @@ void test_truncated_line_reports_the_needed_length() {
   const size_t needed = fw::formatLogLine(fullSample(), out, sizeof(out));
   TEST_ASSERT_TRUE(needed > sizeof(out) - 1);
   TEST_ASSERT_EQUAL_UINT32(sizeof(out) - 1, static_cast<uint32_t>(std::strlen(out)));
+}
+
+void test_parse_line_round_trips_the_current_format() {
+  const LogSample original = fullSample();
+  char line[128];
+  fw::formatLogLine(original, line, sizeof(line));
+
+  LogSample parsed;
+  TEST_ASSERT_TRUE(fw::parseLogLine(line, &parsed));
+  TEST_ASSERT_EQUAL_STRING("2026-11-25 07:37:00", parsed.timestamp);
+  TEST_ASSERT_EQUAL_UINT32(1234, parsed.uptimeMs);
+  TEST_ASSERT_TRUE(parsed.hasTemperature);
+  TEST_ASSERT_FLOAT_WITHIN(0.01f, 23.46f, parsed.temperatureC);
+  TEST_ASSERT_TRUE(parsed.hasPressure);
+  TEST_ASSERT_FLOAT_WITHIN(0.01f, 1006.53f, parsed.pressureHpa);
+  TEST_ASSERT_TRUE(parsed.hasHumidity);
+  TEST_ASSERT_FLOAT_WITHIN(0.01f, 45.0f, parsed.humidityPct);
+}
+
+void test_parse_line_accepts_the_v02_four_column_format() {
+  LogSample parsed;
+  TEST_ASSERT_TRUE(fw::parseLogLine("1234,23.46,1006.53,45.0\n", &parsed));
+  TEST_ASSERT_EQUAL_STRING("", parsed.timestamp);
+  TEST_ASSERT_EQUAL_UINT32(1234, parsed.uptimeMs);
+  TEST_ASSERT_TRUE(parsed.hasTemperature);
+  TEST_ASSERT_TRUE(parsed.hasPressure);
+  TEST_ASSERT_TRUE(parsed.hasHumidity);
+}
+
+void test_parse_line_handles_missing_values_and_crlf() {
+  LogSample parsed;
+  TEST_ASSERT_TRUE(fw::parseLogLine("2026-11-25 07:37:00,42,20.00,,\r\n", &parsed));
+  TEST_ASSERT_EQUAL_STRING("2026-11-25 07:37:00", parsed.timestamp);
+  TEST_ASSERT_TRUE(parsed.hasTemperature);
+  TEST_ASSERT_FALSE(parsed.hasPressure);
+  TEST_ASSERT_FALSE(parsed.hasHumidity);
+}
+
+void test_parse_line_rejects_garbage_and_headers() {
+  LogSample parsed;
+  TEST_ASSERT_FALSE(fw::parseLogLine("", &parsed));
+  TEST_ASSERT_FALSE(fw::parseLogLine("hello", &parsed));
+  TEST_ASSERT_FALSE(fw::parseLogLine("a,b", &parsed));
+  TEST_ASSERT_FALSE(fw::parseLogLine(nullptr, &parsed));
+}
+
+void test_header_detection_handles_both_layouts() {
+  TEST_ASSERT_TRUE(fw::isLogHeaderLine(fw::kLogHeaderLine));
+  TEST_ASSERT_TRUE(fw::isLogHeaderLine("uptime_ms,temp_c,pressure_hpa,humidity_pct"));
+  TEST_ASSERT_TRUE(fw::isLogHeaderLine("  timestamp,uptime_ms"));
+  TEST_ASSERT_FALSE(fw::isLogHeaderLine("2026-11-25 07:37:00,1,2,3,4"));
+  TEST_ASSERT_FALSE(fw::isLogHeaderLine(nullptr));
 }
 
 void test_interval_labels() {
@@ -106,6 +159,7 @@ void test_sample_prefers_the_bmp280_temperature() {
   TEST_ASSERT_FLOAT_WITHIN(0.01f, 21.5f, sample.temperatureC);
   TEST_ASSERT_TRUE(sample.hasPressure);
   TEST_ASSERT_TRUE(sample.hasHumidity);
+  TEST_ASSERT_EQUAL_STRING("", sample.timestamp);
 
   SensorSnapshot dhtOnly;
   dhtOnly.dhtPresent = true;
@@ -126,7 +180,7 @@ void test_recorder_creates_the_header_once() {
 
   TEST_ASSERT_TRUE(recorder.begin(0));
   TEST_ASSERT_TRUE(recorder.storageReady());
-  TEST_ASSERT_EQUAL_STRING("uptime_ms,temp_c,pressure_hpa,humidity_pct\n",
+  TEST_ASSERT_EQUAL_STRING("timestamp,uptime_ms,temp_c,pressure_hpa,humidity_pct\n",
                            storage.content.c_str());
   TEST_ASSERT_EQUAL_UINT32(0, recorder.recordCount());
 
@@ -145,7 +199,9 @@ void test_recorder_appends_and_counts_records() {
   TEST_ASSERT_TRUE(recorder.record(fullSample(), 1000));
   TEST_ASSERT_EQUAL_UINT32(1, recorder.recordCount());
   TEST_ASSERT_TRUE(recorder.lastWriteOk());
-  TEST_ASSERT_NOT_NULL(std::strstr(storage.content.c_str(), "\n1234,23.46,1006.53,45.0\n"));
+  TEST_ASSERT_NOT_NULL(std::strstr(
+      storage.content.c_str(),
+      "\n2026-11-25 07:37:00,1234,23.46,1006.53,45.0\n"));
 
   LogSample second;
   second.uptimeMs = 2000;
@@ -181,7 +237,7 @@ void test_interval_gating_and_pause() {
   TEST_ASSERT_EQUAL_UINT32(2, recorder.recordCount());
 }
 
-void test_interval_cycles_through_the_table() {
+void test_interval_cycles_forward_and_back() {
   FakeLogStorage storage;
   LogRecorder recorder(storage, kIntervals, 3);
   recorder.begin(0);
@@ -194,6 +250,10 @@ void test_interval_cycles_through_the_table() {
   TEST_ASSERT_EQUAL_UINT32(300000, recorder.intervalMs());
   recorder.nextInterval();
   TEST_ASSERT_EQUAL_UINT32(10000, recorder.intervalMs());
+  recorder.previousInterval();
+  TEST_ASSERT_EQUAL_UINT32(300000, recorder.intervalMs());
+  recorder.previousInterval();
+  TEST_ASSERT_EQUAL_UINT32(60000, recorder.intervalMs());
 }
 
 void test_write_failure_is_reported() {
@@ -226,10 +286,11 @@ void test_header_failure_blocks_data_until_it_is_rewritten() {
   TEST_ASSERT_EQUAL_UINT32(2, recorder.recordCount());
 
   // Exactly one header, then the two data rows.
-  TEST_ASSERT_EQUAL_STRING("uptime_ms,temp_c,pressure_hpa,humidity_pct\n"
-                           "1234,23.46,1006.53,45.0\n"
-                           "2000,,,\n",
-                           storage.content.c_str());
+  TEST_ASSERT_EQUAL_STRING(
+      "timestamp,uptime_ms,temp_c,pressure_hpa,humidity_pct\n"
+      "2026-11-25 07:37:00,1234,23.46,1006.53,45.0\n"
+      ",2000,,,\n",
+      storage.content.c_str());
   TEST_ASSERT_EQUAL_UINT32(3, static_cast<uint32_t>(std::count(
                                   storage.content.begin(), storage.content.end(), '\n')));
 }
@@ -263,6 +324,46 @@ void test_mount_failure_is_reported() {
   TEST_ASSERT_FALSE(recorder.record(fullSample(), 0));
 }
 
+void test_a_v020_log_is_moved_aside_before_appending() {
+  FakeLogStorage storage;
+  storage.content = "uptime_ms,temp_c,pressure_hpa,humidity_pct\n1000,20.00,1013.00,45.0\n";
+  LogRecorder recorder(storage, kIntervals, 3);
+
+  TEST_ASSERT_TRUE(recorder.begin(0));
+  // The four column file keeps its rows under its own name; the new file starts
+  // empty with the five column header.
+  TEST_ASSERT_EQUAL_STRING(fw::kLegacyLogPath, storage.renamedTo.c_str());
+  TEST_ASSERT_EQUAL_STRING("timestamp,uptime_ms,temp_c,pressure_hpa,humidity_pct\n",
+                           storage.content.c_str());
+  TEST_ASSERT_EQUAL_UINT32(0, recorder.recordCount());
+}
+
+void test_a_failed_migration_blocks_recording() {
+  FakeLogStorage storage;
+  storage.content = "uptime_ms,temp_c,pressure_hpa,humidity_pct\n1000,20.00,1013.00,45.0\n";
+  storage.failRename = true;
+  LogRecorder recorder(storage, kIntervals, 3);
+
+  TEST_ASSERT_FALSE(recorder.begin(0));
+  TEST_ASSERT_TRUE(recorder.migrationFailed());
+  // The old file must not gain a second header or five column rows.
+  const std::string before = storage.content;
+  TEST_ASSERT_FALSE(recorder.record(fullSample(), 1000));
+  TEST_ASSERT_EQUAL_STRING(before.c_str(), storage.content.c_str());
+  TEST_ASSERT_EQUAL_UINT32(0, recorder.recordCount());
+}
+
+void test_the_current_header_is_kept_in_place() {
+  FakeLogStorage storage;
+  storage.content = "timestamp,uptime_ms,temp_c,pressure_hpa,humidity_pct\n"
+                    "2026-11-25 07:37:00,1234,23.46,1006.53,45.0\n";
+  LogRecorder recorder(storage, kIntervals, 3);
+
+  TEST_ASSERT_TRUE(recorder.begin(0));
+  TEST_ASSERT_TRUE(storage.renamedTo.empty());
+  TEST_ASSERT_EQUAL_UINT32(1, recorder.recordCount());
+}
+
 void test_clear_restarts_the_file() {
   FakeLogStorage storage;
   LogRecorder recorder(storage, kIntervals, 3);
@@ -273,7 +374,7 @@ void test_clear_restarts_the_file() {
 
   TEST_ASSERT_TRUE(recorder.clear(2000));
   TEST_ASSERT_EQUAL_UINT32(0, recorder.recordCount());
-  TEST_ASSERT_EQUAL_STRING("uptime_ms,temp_c,pressure_hpa,humidity_pct\n",
+  TEST_ASSERT_EQUAL_STRING("timestamp,uptime_ms,temp_c,pressure_hpa,humidity_pct\n",
                            storage.content.c_str());
   TEST_ASSERT_EQUAL_UINT32(static_cast<uint32_t>(std::strlen(fw::kLogHeaderLine)) + 1,
                            recorder.fileSize());
@@ -289,17 +390,25 @@ int main(int argc, char** argv) {
   RUN_TEST(test_line_formats_every_column);
   RUN_TEST(test_missing_values_keep_the_columns_empty);
   RUN_TEST(test_truncated_line_reports_the_needed_length);
+  RUN_TEST(test_parse_line_round_trips_the_current_format);
+  RUN_TEST(test_parse_line_accepts_the_v02_four_column_format);
+  RUN_TEST(test_parse_line_handles_missing_values_and_crlf);
+  RUN_TEST(test_parse_line_rejects_garbage_and_headers);
+  RUN_TEST(test_header_detection_handles_both_layouts);
   RUN_TEST(test_interval_labels);
   RUN_TEST(test_uptime_labels);
   RUN_TEST(test_sample_prefers_the_bmp280_temperature);
   RUN_TEST(test_recorder_creates_the_header_once);
   RUN_TEST(test_recorder_appends_and_counts_records);
   RUN_TEST(test_interval_gating_and_pause);
-  RUN_TEST(test_interval_cycles_through_the_table);
+  RUN_TEST(test_interval_cycles_forward_and_back);
   RUN_TEST(test_write_failure_is_reported);
   RUN_TEST(test_header_failure_blocks_data_until_it_is_rewritten);
   RUN_TEST(test_a_failed_write_is_not_retried_on_every_loop);
   RUN_TEST(test_mount_failure_is_reported);
+  RUN_TEST(test_a_v020_log_is_moved_aside_before_appending);
+  RUN_TEST(test_the_current_header_is_kept_in_place);
+  RUN_TEST(test_a_failed_migration_blocks_recording);
   RUN_TEST(test_clear_restarts_the_file);
   return UNITY_END();
 }
