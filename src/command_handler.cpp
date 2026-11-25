@@ -177,6 +177,8 @@ Command parseCommand(const char* line) {
       command.type = CommandType::kWifiStatus;
     } else if (equalsIgnoreCase(arg, "ap")) {
       command.type = CommandType::kWifiAp;
+    } else if (equalsIgnoreCase(arg, "station") || equalsIgnoreCase(arg, "connect")) {
+      command.type = CommandType::kWifiStation;
     } else if (equalsIgnoreCase(arg, "clear")) {
       command.type = CommandType::kWifiClear;
     } else {
@@ -284,6 +286,7 @@ const char* commandHelpText(FirmwareTarget target) {
          "  mode NAME  open env/logs/wifi/ble/timer/system/menu\n"
          "  wifi       show the Wi-Fi and NTP status\n"
          "  wifi ap    start the setup access point\n"
+         "  wifi station  reconnect to the saved network\n"
          "  wifi clear forget the saved network\n"
          "  ble        show the BLE status\n"
          "  ble hid on|off  media remote mode\n"

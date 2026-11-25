@@ -31,13 +31,19 @@ LogSample makeLogSample(const SensorSnapshot& snapshot, uint32_t uptimeMs);
 constexpr const char* kLogHeaderLine =
     "timestamp,uptime_ms,temp_c,pressure_hpa,humidity_pct";
 
+// Where a v0.2.0 (four column) log is moved before the new five column file is
+// started: rows of both layouts must never share one CSV.
+constexpr const char* kLegacyLogPath = "/log-v020.csv";
+
 // Both always NUL terminate and return the untruncated length (snprintf
 // semantics), including the trailing newline.
 size_t formatLogHeader(char* out, size_t outSize);
 size_t formatLogLine(const LogSample& sample, char* out, size_t outSize);
 
-// True for the CSV header row.
+// True for the CSV header row (either layout).
 bool isLogHeaderLine(const char* line);
+// True when `line` is exactly the current five column header.
+bool isCurrentLogHeader(const char* line);
 // Parses one data row. Accepts the v0.2.0 four column layout as well, so an
 // existing /log.csv still shows up in /api/logs.
 bool parseLogLine(const char* line, LogSample* out);
@@ -59,6 +65,10 @@ class LogStorage {
   virtual uint32_t countDataLines() = 0;
   virtual uint32_t fileSize() = 0;
   virtual bool removeFile() = 0;
+  // First line of the log (the CSV header), empty when there is no log yet.
+  virtual size_t readHeaderLine(char* out, size_t outSize) = 0;
+  // Moves the log to `newPath` so an old layout can be kept aside.
+  virtual bool renameFile(const char* newPath) = 0;
 };
 
 class LogRecorder {

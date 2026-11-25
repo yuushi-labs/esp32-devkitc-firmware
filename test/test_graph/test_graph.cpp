@@ -131,10 +131,16 @@ void test_alerts_use_the_configured_thresholds() {
   TEST_ASSERT_FALSE(alerts.highTemperature);
   TEST_ASSERT_TRUE(alerts.lowHumidity);
 
+  // The pressure alert only fires while the sensor still answers.
+  sensors.pressureValid = true;
+  sensors.pressureHpa = 1006.0f;
   alerts = evaluateAlerts(sensors, -1.5f);
   TEST_ASSERT_TRUE(alerts.pressureJump);
   alerts = evaluateAlerts(sensors, 1.4f);
   TEST_ASSERT_FALSE(alerts.pressureJump);
+
+  sensors.pressureValid = false;
+  TEST_ASSERT_FALSE(evaluateAlerts(sensors, -3.0f).pressureJump);
 
   // A missing temperature must not fire the high temperature alert.
   SensorSnapshot empty;
@@ -147,6 +153,8 @@ void test_alert_line_formatting() {
   sensors.temperatureC = 31.0f;
   sensors.humidityValid = true;
   sensors.humidityPct = 30.0f;
+  sensors.pressureValid = true;
+  sensors.pressureHpa = 1002.0f;
 
   AlertState alerts;
   char out[48];

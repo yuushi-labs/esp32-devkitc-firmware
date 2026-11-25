@@ -150,7 +150,7 @@ bool stationModeFromName(const char* name, StationMode* out) {
     *out = StationMode::kSystem;
     return true;
   }
-  if (name[1] == '\0' && name[0] >= '1' && name[0] <= '6') {
+  if (name[0] >= '1' && name[0] <= '6' && name[1] == '\0') {
     *out = stationModeFromIndex(static_cast<size_t>(name[0] - '1'));
     return true;
   }
@@ -349,6 +349,8 @@ void buildStationPage(StationMode mode, const StationView& view, PageLines* out)
       out->add(view.wifiMode == WifiMode::kAccessPoint ? "WIFI SETUP (AP)" : "WIFI STATION");
       if (view.wifiMode == WifiMode::kAccessPoint) {
         addf(*out, 1, "ap %s", kSetupApSsid);
+        addf(*out, 1, "pass %s",
+             view.apPassword[0] != '\0' ? view.apPassword : "-");
         out->add("join, then open");
         out->add("http://192.168.4.1/");
       } else if (view.wifiConnected) {
@@ -362,7 +364,7 @@ void buildStationPage(StationMode mode, const StationView& view, PageLines* out)
         out->add("PSH for AP setup");
       }
       out->add("CON show QR");
-      out->add("PSH AP  BAK back");
+      out->add("PSH AP/STA  BAK back");
       break;
     }
 

@@ -80,6 +80,19 @@ bool isLogHeaderLine(const char* line) {
          std::strncmp(line, "uptime_ms,", 10) == 0;
 }
 
+bool isCurrentLogHeader(const char* line) {
+  if (line == nullptr) {
+    return false;
+  }
+  size_t length = std::strlen(line);
+  while (length > 0 && (line[length - 1] == '\n' || line[length - 1] == '\r' ||
+                        line[length - 1] == ' ')) {
+    --length;
+  }
+  const size_t expected = std::strlen(kLogHeaderLine);
+  return length == expected && std::strncmp(line, kLogHeaderLine, expected) == 0;
+}
+
 namespace {
 
 // Splits `line` in place on commas. Returns the number of fields.
@@ -209,11 +222,24 @@ LogRecorder::LogRecorder(LogStorage& storage, const uint32_t* intervals,
 bool LogRecorder::begin(uint32_t nowMs) {
   storageReady_ = storage_.begin();
   lastWriteOk_ = false;
+  headerReady_ = false;
   if (!storageReady_) {
     return false;
   }
 
   fileSize_ = storage_.fileSize();
+  if (fileSize_ > 0) {
+    char header[96] = {0};
+    storage_.readHeaderLine(header, sizeof(header));
+    if (!isCurrentLogHeader(header)) {
+      // The v0.2.0 firmware wrote four columns; appending five column rows under
+      // that header would make the file ambiguous, so keep it aside.
+      if (!storage_.renameFile(kLegacyLogPath)) {
+        return false;
+      }
+      fileSize_ = 0;
+    }
+  }
   // An existing file is assumed to start with the header; a new one gets it
   // written before any data row is allowed.
   headerReady_ = fileSize_ > 0 ? true : writeHeader();

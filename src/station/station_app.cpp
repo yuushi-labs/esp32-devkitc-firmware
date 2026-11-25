@@ -19,6 +19,19 @@ void printLine(const char* text) {
   }
 }
 
+// FNV-1a over the panel bytes: cheap, and enough to skip sending a frame that is
+// identical to the one on the panel. A full 128x64 frame costs about 90 ms on
+// the 100 kHz I2C bus, so the Wi-Fi and BLE stacks must not pay for it twice.
+uint32_t frameHash(const Framebuffer& framebuffer) {
+  uint32_t hash = 2166136261u;
+  const uint8_t* bytes = framebuffer.buffer();
+  for (size_t index = 0; index < Framebuffer::kWidth * Framebuffer::kPageCount;
+       ++index) {
+    hash = (hash ^ bytes[index]) * 16777619u;
+  }
+  return hash;
+}
+
 }  // namespace
 
 StationApp::StationApp()
@@ -105,8 +118,14 @@ void StationApp::loop() {
   timer_.update(nowMs);
   if (timer_.consumeFinished()) {
     alarmUntilMs_ = nowMs + 10000;
+    alarmActive_ = true;
     Serial.printf("timer: finished (%s)\n", timerPhaseName(timer_.phase()));
     dirty_ = true;
+  }
+  // The alarm is a separate flag: comparing an unset deadline (0) with millis()
+  // would fire after half a millisecond-counter wrap (~24.9 days).
+  if (alarmActive_ && static_cast<int32_t>(nowMs - alarmUntilMs_) >= 0) {
+    alarmActive_ = false;
   }
 
   LogSample sample = makeLogSample(snapshot_, nowMs);
@@ -137,10 +156,10 @@ void StationApp::loop() {
 }
 
 bool StationApp::alertActive() const {
-  if (currentAlerts().any()) {
+  if (alarmActive_) {
     return true;
   }
-  return static_cast<int32_t>(alarmUntilMs_ - millis()) > 0;
+  return currentAlerts().any();
 }
 
 AlertState StationApp::currentAlerts() const {
@@ -265,6 +284,8 @@ void StationApp::updateView(uint32_t nowMs) {
   view_.ntpSynced = wifi_.ntpSynced();
   std::snprintf(view_.wifiSsid, sizeof(view_.wifiSsid), "%s", wifi_.ssid());
   std::snprintf(view_.ip, sizeof(view_.ip), "%s", wifi_.ip());
+  std::snprintf(view_.apPassword, sizeof(view_.apPassword), "%s",
+                wifi_.setupApPassword());
   view_.rssi = wifi_.rssi();
   const int64_t epoch = wifi_.epochSeconds();
   if (epoch > 0) {
@@ -302,8 +323,15 @@ void StationApp::redraw() {
     drawLines = false;
   } else if (controller_.mode() == StationMode::kWifi && qrVisible_ && qr_.valid()) {
     framebuffer_.clear();
-    drawQrCode(framebuffer_, qr_, Framebuffer::kWidth, Framebuffer::kHeight);
     drawLines = false;
+    if (drawQrCode(framebuffer_, qr_, Framebuffer::kWidth, Framebuffer::kHeight) == 0) {
+      // The panel cannot hold this code at a readable size, so show the address
+      // instead of a QR that no camera can read.
+      page_.clear();
+      page_.add("QR too large");
+      page_.add(stationUrl_);
+      drawPageLines(framebuffer_, page_);
+    }
   } else {
     buildStationPage(controller_.mode(), view_, &page_);
   }
@@ -312,9 +340,16 @@ void StationApp::redraw() {
     drawPageLines(framebuffer_, page_);
   }
   if (displayReady_) {
-    if (!display_.flush()) {
-      displayReady_ = false;
-      Serial.println("oled: flush failed, continuing without the panel");
+    const uint32_t hash = frameHash(framebuffer_);
+    if (!frameSent_ || hash != lastFrameHash_) {
+      if (display_.flush()) {
+        lastFrameHash_ = hash;
+        frameSent_ = true;
+      } else {
+        displayReady_ = false;
+        frameSent_ = false;
+        Serial.println("oled: flush failed, continuing without the panel");
+      }
     }
   }
   dirty_ = false;
@@ -325,8 +360,19 @@ void StationApp::enterMode(StationMode mode) {
   if (mode == StationMode::kWifi) {
     updateQrPayload();
   }
+  // A button press that started in another screen must not be mistaken for one
+  // that began here.
+  confirmPressedInLogs_ = false;
+  confirmLongFired_ = false;
   Serial.printf("mode: %s\n", stationModeName(mode));
   dirty_ = true;
+}
+
+void StationApp::switchMode(StationMode mode) {
+  if (controller_.screen() == StationScreen::kMode) {
+    leaveMode(controller_.mode());
+  }
+  enterMode(mode);
 }
 
 void StationApp::leaveMode(StationMode mode) {
@@ -336,6 +382,8 @@ void StationApp::leaveMode(StationMode mode) {
   if (mode == StationMode::kWifi) {
     qrVisible_ = false;
   }
+  confirmPressedInLogs_ = false;
+  confirmLongFired_ = false;
 }
 
 void StationApp::handleInputs(const InputEvent& event, uint32_t nowMs) {
@@ -431,19 +479,26 @@ void StationApp::handleModeInputs(const InputEvent& event, uint32_t nowMs) {
         dirty_ = true;
       }
       if (confirm) {
+        confirmPressedInLogs_ = true;
         confirmLongFired_ = false;
       }
-      if (confirmLong) {
+      if (confirmLong && confirmPressedInLogs_) {
         confirmLongFired_ = true;
         const bool enabled = recorder_.toggleEnabled();
         Serial.printf("input: CON long -> recording %s\n", enabled ? "on" : "off");
         dirty_ = true;
       }
-      if (confirmRelease && !confirmLongFired_) {
-        recordNow(nowMs, true);
+      if (confirmRelease) {
+        // Only a press that began on this screen is a manual record; the release
+        // of the press that opened the screen must not add a row.
+        if (confirmPressedInLogs_ && !confirmLongFired_) {
+          recordNow(nowMs, true);
+        }
+        confirmPressedInLogs_ = false;
       }
       if (back) {
         controller_.back();
+        confirmPressedInLogs_ = false;
         dirty_ = true;
       }
       break;
@@ -453,7 +508,16 @@ void StationApp::handleModeInputs(const InputEvent& event, uint32_t nowMs) {
         showQr();
       }
       if (push) {
-        wifi_.startAccessPoint();
+        // Toggle between the setup AP and the stored network so a stray press
+        // cannot leave the station stranded in setup mode.
+        if (wifi_.apActive() && wifi_.hasStoredCredentials()) {
+          wifi_.startStation();
+          Serial.println("wifi: back to station mode");
+        } else {
+          wifi_.startAccessPoint();
+          Serial.printf("wifi: setup AP '%s' password %s\n", kSetupApSsid,
+                        wifi_.setupApPassword());
+        }
         dirty_ = true;
       }
       if (back) {
@@ -615,7 +679,7 @@ void StationApp::showQr() {
   }
   qrVisible_ = true;
   qrUntilMs_ = millis() + kQrDisplayDurationMs;
-  controller_.selectMode(StationMode::kWifi);
+  switchMode(StationMode::kWifi);
   dirty_ = true;
   Serial.printf("qr: %s\n", stationUrl_);
 }
@@ -705,7 +769,7 @@ bool StationApp::handleCommand(const Command& command) {
       if (controller_.screen() == StationScreen::kMenu) {
         controller_.menuMove(1);
       } else {
-        enterMode(nextStationMode(controller_.mode()));
+        switchMode(nextStationMode(controller_.mode()));
       }
       announceMode();
       dirty_ = true;
@@ -714,13 +778,14 @@ bool StationApp::handleCommand(const Command& command) {
       if (controller_.screen() == StationScreen::kMenu) {
         controller_.menuMove(-1);
       } else {
-        enterMode(previousStationMode(controller_.mode()));
+        switchMode(previousStationMode(controller_.mode()));
       }
       announceMode();
       dirty_ = true;
       return true;
     case CommandType::kPageSelect:
-      if (controller_.selectModeIndex(command.page)) {
+      if (command.page >= 1 && command.page <= kStationModeCount) {
+        switchMode(stationModeFromIndex(static_cast<size_t>(command.page) - 1));
         announceMode();
       } else {
         Serial.println("error: page must be 1..6");
@@ -732,7 +797,17 @@ bool StationApp::handleCommand(const Command& command) {
       return true;
     case CommandType::kWifiAp:
       wifi_.startAccessPoint();
-      Serial.printf("wifi: setup AP '%s' at %s\n", kSetupApSsid, wifi_.ip());
+      Serial.printf("wifi: setup AP '%s' at %s password %s\n", kSetupApSsid, wifi_.ip(),
+                    wifi_.setupApPassword());
+      dirty_ = true;
+      return true;
+    case CommandType::kWifiStation:
+      if (wifi_.hasStoredCredentials()) {
+        wifi_.startStation();
+        Serial.println("wifi: connecting to the stored network");
+      } else {
+        Serial.println("wifi: no stored network; use 'wifi ap' to set one up");
+      }
       dirty_ = true;
       return true;
     case CommandType::kWifiClear:
@@ -744,7 +819,7 @@ bool StationApp::handleCommand(const Command& command) {
       printBleStatus();
       return true;
     case CommandType::kBleHidOn:
-      enterMode(StationMode::kBle);
+      switchMode(StationMode::kBle);
       ble_.setHidMode(true);
       Serial.println("ble: hid media remote on");
       dirty_ = true;
@@ -790,6 +865,8 @@ bool StationApp::handleCommand(const Command& command) {
       } else if (controller_.mode() != StationMode::kBle && ble_.hidMode()) {
         ble_.setHidMode(false);
       }
+      confirmPressedInLogs_ = false;
+      confirmLongFired_ = false;
       announceMode();
       dirty_ = true;
       return true;

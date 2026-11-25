@@ -79,7 +79,9 @@ constexpr size_t kLogIntervalCount = sizeof(kLogIntervalsMs) / sizeof(kLogInterv
 // How often the sensors are polled and the panel contents are rebuilt.
 constexpr uint32_t kSensorPollIntervalMs = 2000;
 constexpr uint32_t kDhtPollIntervalMs = 2500;
-constexpr uint32_t kDisplayRefreshMs = 200;
+// The panel is only re-sent when its pixels change; this is the cap for the
+// time based parts of the UI (clock, countdown).
+constexpr uint32_t kDisplayRefreshMs = 500;
 
 // A pressure change of this many hPa counts as a trend (rising/falling).
 constexpr float kPressureTrendThresholdHpa = 0.25f;
@@ -92,9 +94,14 @@ constexpr uint32_t kDhtStartupDelayMs = 1500;
 // Wi-Fi / NTP / web dashboard
 // ---------------------------------------------------------------------------
 
-// Captive portal used until a network has been saved in NVS.
+// Captive portal used until a network has been saved in NVS. The AP is WPA2
+// protected with a random key per start so the password typed into the setup
+// form is not sent over an open network; the key is shown on the OLED.
 constexpr const char* kSetupApSsid = "ESP32-Station-AP";
-constexpr const char* kSetupApPassword = "";  // open network, setup only
+constexpr size_t kSetupApPasswordLength = 8;
+// How long the setup form stays valid and how often the AP rescans for SSIDs.
+constexpr uint32_t kSetupSessionMs = 10 * 60 * 1000;
+constexpr uint32_t kSetupScanIntervalMs = 20000;
 
 constexpr uint32_t kWifiConnectTimeoutMs = 15000;
 constexpr uint32_t kWifiRetryIntervalMs = 30000;
@@ -117,8 +124,10 @@ constexpr uint32_t kQrDisplayDurationMs = 60000;
 constexpr const char* kBleDeviceName = "ESP32-EnvStation";
 constexpr uint32_t kBleNotifyIntervalMs = 2000;
 // HID consumer reports are sent as key-down then key-up; the release follows
-// after this short delay.
+// after this short delay, and the next press waits for the gap so two quick
+// detents stay two separate key presses.
 constexpr uint32_t kBleHidReleaseMs = 30;
+constexpr uint32_t kBleHidReportGapMs = 15;
 // Advertising restarts this long after a client disconnects.
 constexpr uint32_t kBleRestartAdvertisingMs = 500;
 

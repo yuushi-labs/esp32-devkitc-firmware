@@ -57,7 +57,13 @@ void CountdownTimer::adjust(int delta) {
   if (running_) {
     return;
   }
-  pomodoro_ = false;
+  if (pomodoro_) {
+    // Leaving pomodoro with the encoder also drops its work/break phase: the
+    // countdown is a plain timer from here on.
+    pomodoro_ = false;
+    phase_ = TimerPhase::kIdle;
+    finished_ = false;
+  }
   setMinutes(static_cast<uint8_t>(clampMinutes(static_cast<int>(minutes_) + delta)));
 }
 

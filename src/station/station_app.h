@@ -58,6 +58,8 @@ class StationApp : public WebDashboardHost {
   void handleInputs(const InputEvent& event, uint32_t nowMs);
   void handleModeInputs(const InputEvent& event, uint32_t nowMs);
   void enterMode(StationMode mode);
+  // Leaves the current mode (HID remote off, QR hidden) and opens the new one.
+  void switchMode(StationMode mode);
   void leaveMode(StationMode mode);
   void recordNow(uint32_t nowMs, bool manual);
   void fillTimestamp(LogSample* sample) const;
@@ -101,7 +103,12 @@ class StationApp : public WebDashboardHost {
   bool displayReady_ = false;
   bool dirty_ = true;
   bool confirmLongFired_ = false;
+  bool confirmPressedInLogs_ = false;
   bool qrVisible_ = false;
+  // Last frame actually sent to the panel, so identical frames cost no I2C time.
+  uint32_t lastFrameHash_ = 0;
+  bool frameSent_ = false;
+  bool alarmActive_ = false;
 
   uint32_t lastSensorPollMs_ = 0;
   uint32_t lastBmpRetryMs_ = 0;

@@ -30,8 +30,12 @@ AlertState evaluateAlerts(const SensorSnapshot& sensors, float pressureDeltaHpa)
   if (sensors.hasHumidity()) {
     alerts.lowHumidity = sensors.humidityPct <= kLowHumidityAlertPct;
   }
-  const float delta = pressureDeltaHpa < 0 ? -pressureDeltaHpa : pressureDeltaHpa;
-  alerts.pressureJump = delta >= kPressureJumpAlertHpa;
+  // The delta is only meaningful while the sensor still answers: after a failed
+  // read the last value must not keep an alert blinking.
+  if (sensors.hasPressure()) {
+    const float delta = pressureDeltaHpa < 0 ? -pressureDeltaHpa : pressureDeltaHpa;
+    alerts.pressureJump = delta >= kPressureJumpAlertHpa;
+  }
   return alerts;
 }
 

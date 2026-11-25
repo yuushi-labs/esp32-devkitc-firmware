@@ -75,6 +75,8 @@ struct StationView {
   char ip[16] = "0.0.0.0";
   int8_t rssi = 0;
   char clock[6] = "--:--";
+  // WPA2 key of the setup AP, generated per start and shown on the panel.
+  char apPassword[9] = {0};
 
   // BLE
   bool bleEnabled = false;

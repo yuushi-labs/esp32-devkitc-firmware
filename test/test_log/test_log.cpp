@@ -324,6 +324,31 @@ void test_mount_failure_is_reported() {
   TEST_ASSERT_FALSE(recorder.record(fullSample(), 0));
 }
 
+void test_a_v020_log_is_moved_aside_before_appending() {
+  FakeLogStorage storage;
+  storage.content = "uptime_ms,temp_c,pressure_hpa,humidity_pct\n1000,20.00,1013.00,45.0\n";
+  LogRecorder recorder(storage, kIntervals, 3);
+
+  TEST_ASSERT_TRUE(recorder.begin(0));
+  // The four column file keeps its rows under its own name; the new file starts
+  // empty with the five column header.
+  TEST_ASSERT_EQUAL_STRING(fw::kLegacyLogPath, storage.renamedTo.c_str());
+  TEST_ASSERT_EQUAL_STRING("timestamp,uptime_ms,temp_c,pressure_hpa,humidity_pct\n",
+                           storage.content.c_str());
+  TEST_ASSERT_EQUAL_UINT32(0, recorder.recordCount());
+}
+
+void test_the_current_header_is_kept_in_place() {
+  FakeLogStorage storage;
+  storage.content = "timestamp,uptime_ms,temp_c,pressure_hpa,humidity_pct\n"
+                    "2026-11-25 07:37:00,1234,23.46,1006.53,45.0\n";
+  LogRecorder recorder(storage, kIntervals, 3);
+
+  TEST_ASSERT_TRUE(recorder.begin(0));
+  TEST_ASSERT_TRUE(storage.renamedTo.empty());
+  TEST_ASSERT_EQUAL_UINT32(1, recorder.recordCount());
+}
+
 void test_clear_restarts_the_file() {
   FakeLogStorage storage;
   LogRecorder recorder(storage, kIntervals, 3);
@@ -366,6 +391,8 @@ int main(int argc, char** argv) {
   RUN_TEST(test_header_failure_blocks_data_until_it_is_rewritten);
   RUN_TEST(test_a_failed_write_is_not_retried_on_every_loop);
   RUN_TEST(test_mount_failure_is_reported);
+  RUN_TEST(test_a_v020_log_is_moved_aside_before_appending);
+  RUN_TEST(test_the_current_header_is_kept_in_place);
   RUN_TEST(test_clear_restarts_the_file);
   return UNITY_END();
 }

@@ -41,6 +41,7 @@ enum class CommandType {
   // Station v0.3.0: Wi-Fi, BLE, timer and mode navigation.
   kWifiStatus,
   kWifiAp,
+  kWifiStation,
   kWifiClear,
   kBleStatus,
   kBleHidOn,
