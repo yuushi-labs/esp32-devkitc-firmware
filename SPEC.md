@@ -94,7 +94,7 @@ I2C は 100 kHz。`Wire.setTimeOut(50)` で未接続デバイスによるブロ�
   - `GET /api/logs`: 直近の履歴データ（JSON 配列）
   - Raspberry Pi や他アプリからも連携しやすい構成
 - **OLED QR コード表示**:
-  - Wi-Fi 接続中に Wi-Fi 画面で `CON` を押すと `http://<IP>/` の QR コードを 128x64 OLED に描画し、スマホのカメラで読み取るだけで即開ける
+  - Wi-Fi 接続中に Wi-Fi 画面で `CON` を押すか、Web ダッシュボードの「Show QR on OLED」を押すと `http://<IP>/` の QR コードを 128x64 OLED に描画し、スマホのカメラで読み取るだけで即開ける
 
 ### 4.5 📶 Bluetooth（BLE）2 機能
 - Flash / RAM 節約のため **NimBLE**（または軽量 BLE 構成）を採用する

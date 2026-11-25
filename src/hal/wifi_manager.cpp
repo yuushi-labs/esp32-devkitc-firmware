@@ -89,7 +89,8 @@ void WifiManager::startAccessPoint() {
     dnsStarted_ = false;
   }
   WiFi.disconnect(true);
-  WiFi.mode(WIFI_AP);
+  // AP+STA keeps the radio able to scan nearby networks for the setup form.
+  WiFi.mode(WIFI_AP_STA);
   WiFi.softAP(kSetupApSsid, kSetupApPassword[0] != '\0' ? kSetupApPassword : nullptr);
   mode_ = WifiMode::kAccessPoint;
   ntpStarted_ = false;

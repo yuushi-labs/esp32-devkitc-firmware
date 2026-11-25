@@ -115,7 +115,7 @@ v0.3.0 でも **配線は v0.2.0 から変更ありません**（`pins.json` も
 - **初回設定（AP モード）**: SSID `ESP32-Station-AP`（オープン）に接続し、`http://192.168.4.1/` のフォームで周辺 SSID を選びパスワードを保存します。認証情報は NVS（`Preferences`）に保存され、次回起動時に自動接続します
 - **ダッシュボード**: `http://<ESP32 の IP>/` に外部 CDN 非依存の HTML/CSS/JS を配信します。温湿度・気圧・不快指数・Wi-Fi/BLE/ログ/タイマー状態を自動更新し、履歴グラフ・`/log.csv` ダウンロード・ログ消去を提供します
 - **JSON API**: `GET /api/status`（現在値と各機能の状態）、`GET /api/logs`（直近 240 件の履歴）、`GET /download`（CSV）
-- **QR コード**: Wi-Fi モードで `CON` を押すと `http://<IP>/` の QR コードを OLED に描画します（内蔵エンコーダ、ISO/IEC 18004 byte mode・version 1〜10）
+- **QR コード**: Wi-Fi モードで `CON` を押すか、Web ダッシュボードの「Show QR on OLED」を押すと `http://<IP>/` の QR コードを OLED に描画します（内蔵エンコーダ、ISO/IEC 18004 byte mode・version 1〜10）
 - 未設定・切断時も環境モニター・ログ・BLE・タイマーはオフラインで動作し、Wi-Fi はブロッキングせずバックグラウンドで再接続します
 
 ### Bluetooth（BLE）
