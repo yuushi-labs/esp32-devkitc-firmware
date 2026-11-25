@@ -87,11 +87,27 @@ bool LittleFsLogStorage::renameFile(const char* newPath) {
   if (newPath == nullptr || !LittleFS.exists(path_)) {
     return false;
   }
-  // Replace an older copy so a second upgrade cannot fail on the name.
-  if (LittleFS.exists(newPath)) {
-    LittleFS.remove(newPath);
+  // Keep an older backup instead of deleting it: after a downgrade to v0.2.0 and
+  // a second upgrade the previous /log-v020.csv must survive, so a taken name
+  // becomes /log-v020-2.csv, -3 and so on.
+  char candidate[64];
+  std::snprintf(candidate, sizeof(candidate), "%s", newPath);
+  const size_t length = std::strlen(newPath);
+  const bool csvSuffix =
+      length > 4 && std::strcmp(newPath + length - 4, ".csv") == 0;
+  for (int attempt = 2; attempt <= 9 && LittleFS.exists(candidate); ++attempt) {
+    if (csvSuffix) {
+      std::snprintf(candidate, sizeof(candidate), "%.*s-%d.csv",
+                    static_cast<int>(length - 4), newPath, attempt);
+    } else {
+      std::snprintf(candidate, sizeof(candidate), "%s-%d", newPath, attempt);
+    }
   }
-  return LittleFS.rename(path_, newPath);
+  if (LittleFS.exists(candidate)) {
+    // Out of names: leaving the old file in place beats overwriting data.
+    return false;
+  }
+  return LittleFS.rename(path_, candidate);
 }
 
 }  // namespace fw

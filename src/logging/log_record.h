@@ -67,7 +67,8 @@ class LogStorage {
   virtual bool removeFile() = 0;
   // First line of the log (the CSV header), empty when there is no log yet.
   virtual size_t readHeaderLine(char* out, size_t outSize) = 0;
-  // Moves the log to `newPath` so an old layout can be kept aside.
+  // Moves the log aside so an old layout can be kept: the storage picks a free
+  // name (an existing backup is never overwritten).
   virtual bool renameFile(const char* newPath) = 0;
 };
 
