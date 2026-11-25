@@ -171,6 +171,10 @@ def parse_partition_number(text: str) -> int:
     return number * multiplier
 
 
+def align_up(value: int, alignment: int) -> int:
+    return (value + alignment - 1) // alignment * alignment
+
+
 def load_partition_table(path: Path) -> list[PartitionEntry]:
     """Parse a PlatformIO/ESP-IDF partition CSV (comments and blanks skipped)."""
     try:
@@ -190,14 +194,16 @@ def load_partition_table(path: Path) -> list[PartitionEntry]:
             )
         name, part_type, subtype, offset, size = fields[:5]
         try:
+            size_bytes = parse_partition_number(size)
+            if offset.strip():
+                offset_bytes = parse_partition_number(offset)
+            else:
+                # ESP-IDF allows an empty offset and fills it with the end of the
+                # previous partition, aligned to 4 KB.
+                previous_end = entries[-1].offset + entries[-1].size if entries else 0x9000
+                offset_bytes = align_up(previous_end, 0x1000)
             entries.append(
-                PartitionEntry(
-                    name,
-                    part_type,
-                    subtype,
-                    parse_partition_number(offset),
-                    parse_partition_number(size),
-                )
+                PartitionEntry(name, part_type, subtype, offset_bytes, size_bytes)
             )
         except ValueError as exc:
             raise SystemExit(f"error: {path}:{number}: {exc}") from exc

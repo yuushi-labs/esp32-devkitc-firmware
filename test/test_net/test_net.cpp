@@ -116,6 +116,21 @@ void test_setup_form_rejects_values_that_do_not_fit() {
       &error));
 }
 
+void test_setup_form_rejects_an_embedded_nul() {
+  WifiCredentials credentials;
+  WifiValidation error = WifiValidation::kOk;
+  // "Home%00Guest" fits the buffer, but only "Home" would be usable.
+  TEST_ASSERT_FALSE(parseWifiSetupForm("ssid=Home%00Guest&password=12345678",
+                                      &credentials, &error));
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(WifiValidation::kEmbeddedNul),
+                        static_cast<int>(error));
+
+  TEST_ASSERT_FALSE(parseWifiSetupForm("ssid=Home&password=12345678%00tail",
+                                      &credentials, &error));
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(WifiValidation::kEmbeddedNul),
+                        static_cast<int>(error));
+}
+
 void test_wifi_status_report_formats_local_time() {
   WifiStatus status;
   status.mode = WifiMode::kStation;
@@ -365,7 +380,7 @@ void test_setup_page_lists_and_escapes_networks() {
   const char* ssids[] = {"Home", "<script>"};
   char out[4096];
   const size_t needed =
-      formatSetupPage(ssids, 2, "wrong password", "abc123", out, sizeof(out));
+      formatSetupPage(ssids, 2, "wrong password", "abc123", false, out, sizeof(out));
   TEST_ASSERT_TRUE(needed < sizeof(out));
   TEST_ASSERT_NOT_NULL(std::strstr(out, "action=\"/save\""));
   TEST_ASSERT_NOT_NULL(std::strstr(out, "Nearby networks"));
@@ -377,14 +392,23 @@ void test_setup_page_lists_and_escapes_networks() {
   // The form carries the short lived token POST /save has to echo back.
   TEST_ASSERT_NOT_NULL(std::strstr(out, "name=\"token\" value=\"abc123\""));
   // With results the page must not reload itself.
-  TEST_ASSERT_NULL(std::strstr(out, "http-equiv=\"refresh\""));
+  TEST_ASSERT_NULL(std::strstr(out, "location.reload"));
 }
 
 void test_setup_page_reloads_while_the_scan_is_empty() {
   char out[4096];
-  formatSetupPage(nullptr, 0, "", "tok", out, sizeof(out));
+  formatSetupPage(nullptr, 0, "", "tok", true, out, sizeof(out));
   TEST_ASSERT_NOT_NULL(std::strstr(out, "no networks found yet"));
-  TEST_ASSERT_NOT_NULL(std::strstr(out, "http-equiv=\"refresh\""));
+  // The reload must keep whatever is already typed into the form.
+  TEST_ASSERT_NOT_NULL(std::strstr(out, "location.reload"));
+  TEST_ASSERT_NOT_NULL(std::strstr(out, "ssid.value"));
+}
+
+void test_setup_page_does_not_reload_after_an_empty_scan() {
+  char out[4096];
+  // Hidden SSIDs: the scan finished with nothing, so hand entry must survive.
+  formatSetupPage(nullptr, 0, "", "tok", false, out, sizeof(out));
+  TEST_ASSERT_NULL(std::strstr(out, "location.reload"));
 }
 
 void test_setup_locked_page_explains_the_device_path() {
@@ -414,6 +438,7 @@ int main(int argc, char** argv) {
   RUN_TEST(test_url_decode_handles_plus_and_percent);
   RUN_TEST(test_setup_form_parses);
   RUN_TEST(test_setup_form_rejects_values_that_do_not_fit);
+  RUN_TEST(test_setup_form_rejects_an_embedded_nul);
   RUN_TEST(test_wifi_status_report_formats_local_time);
   RUN_TEST(test_station_url);
   RUN_TEST(test_civil_time_conversion);
@@ -427,6 +452,7 @@ int main(int argc, char** argv) {
   RUN_TEST(test_dashboard_html_is_self_contained);
   RUN_TEST(test_setup_page_lists_and_escapes_networks);
   RUN_TEST(test_setup_page_reloads_while_the_scan_is_empty);
+  RUN_TEST(test_setup_page_does_not_reload_after_an_empty_scan);
   RUN_TEST(test_setup_locked_page_explains_the_device_path);
   RUN_TEST(test_saved_page_escapes_the_ssid);
   return UNITY_END();

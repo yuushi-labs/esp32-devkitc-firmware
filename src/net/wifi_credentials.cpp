@@ -68,6 +68,8 @@ const char* wifiValidationMessage(WifiValidation validation) {
       return "password must be at least 8 characters (or empty for an open network)";
     case WifiValidation::kPasswordTooLong:
       return "password must be 63 characters or fewer";
+    case WifiValidation::kEmbeddedNul:
+      return "network name and password cannot contain NUL characters";
   }
   return "invalid Wi-Fi settings";
 }
@@ -154,7 +156,8 @@ bool parseWifiSetupForm(const char* body, WifiCredentials* out,
   }
   char ssid[kWifiSsidMaxLength + 1] = {0};
   bool ssidTruncated = false;
-  urlDecode(value, valueLength, ssid, sizeof(ssid), &ssidTruncated);
+  const size_t ssidLength =
+      urlDecode(value, valueLength, ssid, sizeof(ssid), &ssidTruncated);
   if (ssidTruncated) {
     // A shortened SSID would silently save a different network.
     if (error != nullptr) {
@@ -162,14 +165,28 @@ bool parseWifiSetupForm(const char* body, WifiCredentials* out,
     }
     return false;
   }
+  if (ssidLength != std::strlen(ssid)) {
+    // %00 inside the value: everything after it would silently disappear.
+    if (error != nullptr) {
+      *error = WifiValidation::kEmbeddedNul;
+    }
+    return false;
+  }
 
   char password[kWifiPasswordMaxLength + 1] = {0};
   if (findField(body, "password", &value, &valueLength)) {
     bool passwordTruncated = false;
-    urlDecode(value, valueLength, password, sizeof(password), &passwordTruncated);
+    const size_t passwordLength =
+        urlDecode(value, valueLength, password, sizeof(password), &passwordTruncated);
     if (passwordTruncated) {
       if (error != nullptr) {
         *error = WifiValidation::kPasswordTooLong;
+      }
+      return false;
+    }
+    if (passwordLength != std::strlen(password)) {
+      if (error != nullptr) {
+        *error = WifiValidation::kEmbeddedNul;
       }
       return false;
     }

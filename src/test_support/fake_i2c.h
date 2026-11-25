@@ -130,7 +130,11 @@ class FakeLogStorage : public LogStorage {
   }
 
   size_t readHeaderLine(char* out, size_t outSize) override {
-    if (out == nullptr || outSize == 0 || content.empty()) {
+    if (out == nullptr || outSize == 0) {
+      return 0;
+    }
+    out[0] = '\0';
+    if (content.empty()) {
       return 0;
     }
     const size_t end = content.find('\n');
@@ -142,7 +146,7 @@ class FakeLogStorage : public LogStorage {
   }
 
   bool renameFile(const char* newPath) override {
-    if (!mountOk || newPath == nullptr) {
+    if (!mountOk || newPath == nullptr || failRename) {
       return false;
     }
     renamedTo = newPath;
@@ -152,6 +156,7 @@ class FakeLogStorage : public LogStorage {
 
   bool mountOk = true;
   bool failWrites = false;
+  bool failRename = false;
   std::string content;
   std::string renamedTo;
 };

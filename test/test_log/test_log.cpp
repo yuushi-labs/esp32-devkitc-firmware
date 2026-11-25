@@ -338,6 +338,21 @@ void test_a_v020_log_is_moved_aside_before_appending() {
   TEST_ASSERT_EQUAL_UINT32(0, recorder.recordCount());
 }
 
+void test_a_failed_migration_blocks_recording() {
+  FakeLogStorage storage;
+  storage.content = "uptime_ms,temp_c,pressure_hpa,humidity_pct\n1000,20.00,1013.00,45.0\n";
+  storage.failRename = true;
+  LogRecorder recorder(storage, kIntervals, 3);
+
+  TEST_ASSERT_FALSE(recorder.begin(0));
+  TEST_ASSERT_TRUE(recorder.migrationFailed());
+  // The old file must not gain a second header or five column rows.
+  const std::string before = storage.content;
+  TEST_ASSERT_FALSE(recorder.record(fullSample(), 1000));
+  TEST_ASSERT_EQUAL_STRING(before.c_str(), storage.content.c_str());
+  TEST_ASSERT_EQUAL_UINT32(0, recorder.recordCount());
+}
+
 void test_the_current_header_is_kept_in_place() {
   FakeLogStorage storage;
   storage.content = "timestamp,uptime_ms,temp_c,pressure_hpa,humidity_pct\n"
@@ -393,6 +408,7 @@ int main(int argc, char** argv) {
   RUN_TEST(test_mount_failure_is_reported);
   RUN_TEST(test_a_v020_log_is_moved_aside_before_appending);
   RUN_TEST(test_the_current_header_is_kept_in_place);
+  RUN_TEST(test_a_failed_migration_blocks_recording);
   RUN_TEST(test_clear_restarts_the_file);
   return UNITY_END();
 }

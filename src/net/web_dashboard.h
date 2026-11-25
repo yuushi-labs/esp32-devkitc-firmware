@@ -64,9 +64,11 @@ const char* dashboardHtml();
 
 // GET / (captive portal): scanned SSIDs as one-tap chips and the setup form.
 // `token` is echoed back by POST /save so the server can tell its own form apart
-// from a request another client of the setup AP invented.
+// from a request another client of the setup AP invented. `scanning` keeps the
+// empty list refreshing until the background scan reports back, without wiping
+// what the user already typed.
 size_t formatSetupPage(const char* const* ssids, size_t count, const char* message,
-                       const char* token, char* out, size_t outSize);
+                       const char* token, bool scanning, char* out, size_t outSize);
 
 // Shown when /setup is opened while the station is on a saved network: the
 // credentials can only be changed from the setup access point.

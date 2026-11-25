@@ -367,15 +367,11 @@ tick();logs();setInterval(tick,2000);setInterval(logs,30000);
 }
 
 size_t formatSetupPage(const char* const* ssids, size_t count, const char* message,
-                       const char* token, char* out, size_t outSize) {
+                       const char* token, bool scanning, char* out, size_t outSize) {
   Appender text{out, outSize};
   text.appendf(
       "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
       "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">");
-  if (count == 0) {
-    // The scan runs in the background, so keep reloading until it has results.
-    text.appendf("<meta http-equiv=\"refresh\" content=\"6\">");
-  }
   text.appendf(
       "<title>ESP32 Wi-Fi setup</title><style>"
       "body{margin:0;background:#0d1117;color:#e6edf3;font:15px/1.5 system-ui,sans-serif}"
@@ -426,7 +422,17 @@ size_t formatSetupPage(const char* const* ssids, size_t count, const char* messa
   text.appendf(
       "</ul><p style=\"color:#8b949e;font-size:12px\">The station saves the "
       "network in NVS and reconnects automatically. Hold BAK to leave setup "
-      "mode without saving.</p></main></body></html>");
+      "mode without saving.</p>");
+  if (scanning && count == 0) {
+    // The scan is still running: reload once with the results, but never while
+    // a network name or password is being typed (hidden SSIDs stay 0 results).
+    text.appendf(
+        "<script>setTimeout(function(){"
+        "var ssid=document.getElementById('ssid');var pass="
+        "document.getElementById('password');"
+        "if(!ssid.value&&!pass.value){location.reload();}},6000);</script>");
+  }
+  text.appendf("</main></body></html>");
   return text.needed;
 }
 

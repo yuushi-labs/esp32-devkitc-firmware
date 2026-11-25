@@ -104,6 +104,7 @@ class LogRecorder {
   uint32_t recordCount() const { return recordCount_; }
   uint32_t fileSize() const { return fileSize_; }
   bool lastWriteOk() const { return lastWriteOk_; }
+  bool migrationFailed() const { return migrationFailed_; }
 
  private:
   bool appendLine(const char* line);
@@ -115,6 +116,9 @@ class LogRecorder {
   size_t intervalIndex_ = 0;
   bool storageReady_ = false;
   bool headerReady_ = false;
+  // The old file could not be moved aside: refuse to write until a later boot
+  // manages the migration, instead of appending to a file of the old layout.
+  bool migrationFailed_ = false;
   bool enabled_ = true;
   bool lastWriteOk_ = false;
   bool hasAttempted_ = false;

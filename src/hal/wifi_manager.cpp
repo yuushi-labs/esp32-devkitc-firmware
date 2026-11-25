@@ -168,8 +168,8 @@ void WifiManager::rebaseClock(uint32_t nowMs) {
     return;
   }
   // Keep the millisecond base recent while the network is away, so epochAt()
-  // never has to span a 32 bit wrap.
-  clock_.markSynced(clock_.epochAt(nowMs), nowMs);
+  // never has to span a 32 bit wrap. rebase() carries the sub-second part over.
+  clock_.rebase(nowMs);
   lastRebaseMs_ = nowMs;
 }
 

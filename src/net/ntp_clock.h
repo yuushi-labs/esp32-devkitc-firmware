@@ -43,6 +43,11 @@ class NtpClock {
   void markSynced(int64_t epochSeconds, uint32_t nowMs);
   void clear();
 
+  // Moves the base by the whole seconds that passed since the last sync and
+  // leaves the sub-second remainder on the new base, so repeated re-basing
+  // cannot make the clock drift behind.
+  void rebase(uint32_t nowMs);
+
   bool synced() const { return synced_; }
   // Epoch at `nowMs`, extrapolated with millis(); 0 when never synced.
   int64_t epochAt(uint32_t nowMs) const;

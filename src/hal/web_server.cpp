@@ -161,8 +161,12 @@ void StationWebServer::issueSetupToken(uint32_t nowMs) {
   setupTokenIssuedMs_ = nowMs;
 }
 
+bool StationWebServer::setupAccessPointActive() const {
+  return wifi_ != nullptr && wifi_->apActive();
+}
+
 bool StationWebServer::setupRequestAuthorised() const {
-  if (wifi_ == nullptr || !wifi_->apActive()) {
+  if (!setupAccessPointActive()) {
     // Changing the saved network needs someone at the device (or on the setup
     // AP); a client of the station's own LAN cannot rewrite it.
     return false;
@@ -195,6 +199,7 @@ String StationWebServer::buildSetupPage(const char* message) {
     return String("<html><body>out of memory</body></html>");
   }
   const size_t needed = formatSetupPage(pointers, count, message, setupToken_,
+                                        wifi_ != nullptr && wifi_->scanInProgress(),
                                         buffer.get(), kSetupBufferSize);
   if (needed >= kSetupBufferSize) {
     return String("<html><body>setup page too large</body></html>");
@@ -203,7 +208,7 @@ String StationWebServer::buildSetupPage(const char* message) {
 }
 
 void StationWebServer::handleSetup() {
-  if (!setupRequestAuthorised()) {
+  if (!setupAccessPointActive()) {
     std::unique_ptr<char[]> buffer(new (std::nothrow) char[2048]);
     if (!buffer) {
       server_.send(403, "text/plain", "connect to the setup access point first");
@@ -217,6 +222,8 @@ void StationWebServer::handleSetup() {
     server_.send(403, "text/html", buffer.get());
     return;
   }
+  // Serving the form is what starts the setup session; only a POST carrying
+  // this token can save, and only for the next ten minutes.
   issueSetupToken(millis());
   server_.send(200, "text/html", buildSetupPage(""));
 }

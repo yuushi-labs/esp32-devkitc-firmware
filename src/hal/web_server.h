@@ -47,6 +47,7 @@ class StationWebServer {
   void handleNotFound();
 
   bool setupRequestAuthorised() const;
+  bool setupAccessPointActive() const;
   void issueSetupToken(uint32_t nowMs);
   String buildSetupPage(const char* message);
   void sendSavedPage(const char* ssid);

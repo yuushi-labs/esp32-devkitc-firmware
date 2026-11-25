@@ -235,6 +235,11 @@ bool LogRecorder::begin(uint32_t nowMs) {
       // The v0.2.0 firmware wrote four columns; appending five column rows under
       // that header would make the file ambiguous, so keep it aside.
       if (!storage_.renameFile(kLegacyLogPath)) {
+        // Without the rename there is no safe place to append: stop logging
+        // instead of writing a second header into the old file.
+        migrationFailed_ = true;
+        storageReady_ = false;
+        headerReady_ = false;
         return false;
       }
       fileSize_ = 0;
@@ -324,6 +329,10 @@ bool LogRecorder::record(const LogSample& sample, uint32_t nowMs) {
   hasAttempted_ = true;
   lastAttemptMs_ = nowMs;
 
+  if (!storageReady_) {
+    lastWriteOk_ = false;
+    return false;
+  }
   if (!headerReady_) {
     headerReady_ = writeHeader();
     if (!headerReady_) {

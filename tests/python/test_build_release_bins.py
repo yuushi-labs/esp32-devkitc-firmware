@@ -407,6 +407,18 @@ class PartitionTableTest(unittest.TestCase):
             with self.assertRaises(ValueError):
                 build.parse_partition_number(bad)
 
+    def test_an_empty_offset_follows_the_previous_partition(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            csv_path = Path(tmp) / "auto-offset.csv"
+            csv_path.write_text(
+                "app0, app, ota_0, 0x10000, 0x200000,\n"
+                "spiffs, data, spiffs, , 0x1E0000,\n",
+                encoding="utf-8",
+            )
+            entries = {entry.name: entry for entry in build.load_partition_table(csv_path)}
+            self.assertEqual(entries["spiffs"].offset, 0x210000)
+            self.assertEqual(entries["spiffs"].size, 0x1E0000)
+
     def test_decimal_partition_table_keeps_the_documented_region(self):
         with tempfile.TemporaryDirectory() as tmp:
             csv_path = Path(tmp) / "decimal.csv"

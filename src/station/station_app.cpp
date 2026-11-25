@@ -677,9 +677,11 @@ void StationApp::showQr() {
     Serial.println("qr: encode failed");
     return;
   }
+  // Switch first: leaving a mode hides the QR, so setting the flag before the
+  // switch would immediately clear it again.
+  switchMode(StationMode::kWifi);
   qrVisible_ = true;
   qrUntilMs_ = millis() + kQrDisplayDurationMs;
-  switchMode(StationMode::kWifi);
   dirty_ = true;
   Serial.printf("qr: %s\n", stationUrl_);
 }

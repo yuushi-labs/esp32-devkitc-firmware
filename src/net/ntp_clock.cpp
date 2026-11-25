@@ -101,4 +101,19 @@ int64_t NtpClock::epochAt(uint32_t nowMs) const {
   return lastSyncEpoch_ + static_cast<int64_t>(elapsed / 1000u);
 }
 
+void NtpClock::rebase(uint32_t nowMs) {
+  if (!synced_) {
+    return;
+  }
+  const uint32_t elapsed = nowMs - lastSyncMs_;
+  const uint32_t wholeSeconds = elapsed / 1000u;
+  if (wholeSeconds == 0) {
+    return;
+  }
+  lastSyncEpoch_ += static_cast<int64_t>(wholeSeconds);
+  // Advance the base by exactly the milliseconds those seconds stand for, so the
+  // leftover fraction stays on the clock instead of being dropped.
+  lastSyncMs_ += wholeSeconds * 1000u;
+}
+
 }  // namespace fw

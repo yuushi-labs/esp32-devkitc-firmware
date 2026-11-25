@@ -20,6 +20,8 @@ enum class WifiValidation {
   kSsidTooLong,
   kPasswordTooShort,
   kPasswordTooLong,
+  // The decoded value contained a NUL, so it cannot be a C string.
+  kEmbeddedNul,
 };
 
 const char* wifiValidationMessage(WifiValidation validation);

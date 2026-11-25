@@ -168,9 +168,9 @@ void BleService::notifyConnected(bool connected) {
     const uint8_t current = connections_.load();
     connections_.store(current > 0 ? static_cast<uint8_t>(current - 1) : 0);
     if (connections_.load() == 0) {
-      // The link is gone, so nothing can be held down any more.
-      pressPending_ = false;
-      clearQueue();
+      // The link is gone, so nothing can be held down any more. The queue is
+      // owned by the application task, so only ask it to drop the state.
+      linkLost_.store(true);
     }
   }
   Serial.printf("ble: %s (%u link(s))\n", connected ? "client connected" : "client disconnected",
@@ -254,9 +254,7 @@ void BleService::pumpMediaQueue(uint32_t nowMs) {
   if (queueEmpty()) {
     return;
   }
-  if (reportSent_ &&
-      static_cast<int32_t>(nowMs - lastReportMs_) <
-          static_cast<int32_t>(kBleHidReportGapMs)) {
+  if (reportSent_ && (nowMs - lastReportMs_) < kBleHidReportGapMs) {
     return;
   }
   const MediaAction action = queuePop();
@@ -275,6 +273,10 @@ void BleService::pumpMediaQueue(uint32_t nowMs) {
 void BleService::loop(uint32_t nowMs, const SensorSnapshot& sensors, bool alertActive) {
   if (!enabled_) {
     return;
+  }
+  if (linkLost_.exchange(false)) {
+    pressPending_ = false;
+    clearQueue();
   }
   pumpMediaQueue(nowMs);
   if (!connected()) {

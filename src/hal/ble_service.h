@@ -60,6 +60,9 @@ class BleService {
   bool enabled_ = false;
   bool hidMode_ = false;
   std::atomic<uint8_t> connections_{0};
+  // Set from the NimBLE host task on disconnect; loop() then drops the press
+  // and queue so only the application task ever touches them.
+  std::atomic<bool> linkLost_{false};
   bool pressPending_ = false;
   bool reportSent_ = false;
   uint32_t releaseAtMs_ = 0;
