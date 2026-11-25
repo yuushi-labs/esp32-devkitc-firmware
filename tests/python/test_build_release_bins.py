@@ -380,11 +380,47 @@ class PartitionTableTest(unittest.TestCase):
             self.assertEqual(filesystem["label"], "littlefs")
             self.assertIn("custom.csv", filesystem["notes"])
 
-    def test_station_filesystems_falls_back_without_a_data_partition(self):
+    def test_station_filesystems_falls_back_without_a_partition_file(self):
+        # No table at all is the v0.2.0 compatibility case: keep the known layout.
+        filesystems = build.station_filesystems(Path("/nonexistent/no_ota.csv"))
+        self.assertEqual(int(filesystems[0]["offset"], 16), 0x210000)
+        self.assertEqual(filesystems[0]["size"], 0x1E0000)
+
+    def test_station_filesystems_without_a_data_partition_is_empty(self):
+        # A readable table without a data partition must not advertise the old
+        # fixed region: the flasher would offer to read a /log.csv that cannot
+        # exist.
         with tempfile.TemporaryDirectory() as tmp:
             csv_path = Path(tmp) / "no-data.csv"
             csv_path.write_text("app0, app, ota_0, 0x10000, 0x200000,\n",
                                 encoding="utf-8")
+            self.assertEqual(build.station_filesystems(csv_path), [])
+
+    def test_partition_numbers_accept_decimal_hex_and_suffixes(self):
+        self.assertEqual(build.parse_partition_number("0x1E0000"), 0x1E0000)
+        self.assertEqual(build.parse_partition_number("1966080"), 1966080)
+        self.assertEqual(build.parse_partition_number("2M"), 2 * 1024 * 1024)
+        self.assertEqual(build.parse_partition_number("64k"), 64 * 1024)
+        self.assertEqual(build.parse_partition_number(" 0x10000 "), 0x10000)
+
+        for bad in ("", "M", "0x", "12x"):
+            with self.assertRaises(ValueError):
+                build.parse_partition_number(bad)
+
+    def test_decimal_partition_table_keeps_the_documented_region(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            csv_path = Path(tmp) / "decimal.csv"
+            csv_path.write_text(
+                "nvs, data, nvs, 36864, 20480,\n"
+                "app0, app, ota_0, 65536, 2M,\n"
+                "spiffs, data, spiffs, 2162688, 1966080,\n",
+                encoding="utf-8",
+            )
+            entries = {entry.name: entry for entry in build.load_partition_table(csv_path)}
+            self.assertEqual(entries["spiffs"].offset, 0x210000)
+            self.assertEqual(entries["spiffs"].size, 0x1E0000)
+            self.assertEqual(entries["app0"].size, 0x200000)
+
             filesystem = build.station_filesystems(csv_path)[0]
             self.assertEqual(int(filesystem["offset"], 16), 0x210000)
             self.assertEqual(filesystem["size"], 0x1E0000)

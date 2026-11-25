@@ -20,7 +20,8 @@ The station manifest also advertises the LittleFS data partition parsed from
 
 Usage:
     python scripts/build_release_bins.py \
-        --build-dir .pio/build/esp32dev_station --output-dir dist --version 0.3.0
+        --build-dir .pio/build/esp32dev_station --output-dir dist --version 0.3.0 \
+        --variant station
     python scripts/build_release_bins.py \
         --build-dir .pio/build/esp32dev_tester --output-dir dist \
         --version 0.3.0 --variant tester
@@ -122,6 +123,10 @@ SEGMENTS = (
 
 APP_OFFSET = 0x10000
 
+# 4 MB flash on the ESP32-DevKitC; a partition block that runs past it would
+# point the flasher at a region that does not exist.
+FLASH_SIZE_BYTES = 4 * 1024 * 1024
+
 DEFAULT_VERSION = "0.0.0-dev"
 
 # pins.json lives at the repository root; the firmware embeds the same file.
@@ -137,6 +142,33 @@ class PartitionEntry:
     subtype: str
     offset: int
     size: int
+
+
+def parse_partition_number(text: str) -> int:
+    """Parse an ESP-IDF partition size/offset.
+
+    The CSV format accepts decimal, ``0x`` hexadecimal and ``K``/``M`` suffixes
+    (``spiffs,data,spiffs,2162688,1966080,`` and ``app0,app,ota_0,0x10000,2M,``
+    both work), so the manifest must not read every value as hexadecimal.
+    """
+    value = text.strip()
+    if not value:
+        raise ValueError("empty number")
+    multiplier = 1
+    suffix = value[-1]
+    if suffix in ("k", "K"):
+        multiplier = 1024
+        value = value[:-1]
+    elif suffix in ("m", "M"):
+        multiplier = 1024 * 1024
+        value = value[:-1]
+    if not value:
+        raise ValueError("missing digits")
+    if value.lower().startswith("0x"):
+        number = int(value, 16)
+    else:
+        number = int(value, 10)
+    return number * multiplier
 
 
 def load_partition_table(path: Path) -> list[PartitionEntry]:
@@ -159,7 +191,13 @@ def load_partition_table(path: Path) -> list[PartitionEntry]:
         name, part_type, subtype, offset, size = fields[:5]
         try:
             entries.append(
-                PartitionEntry(name, part_type, subtype, int(offset, 16), int(size, 16))
+                PartitionEntry(
+                    name,
+                    part_type,
+                    subtype,
+                    parse_partition_number(offset),
+                    parse_partition_number(size),
+                )
             )
         except ValueError as exc:
             raise SystemExit(f"error: {path}:{number}: {exc}") from exc
@@ -167,7 +205,15 @@ def load_partition_table(path: Path) -> list[PartitionEntry]:
 
 
 def station_filesystems(partition_csv: Path | None = None) -> list[dict]:
-    """LittleFS/SPIFFS data partition advertised in the station manifest."""
+    """LittleFS/SPIFFS data partition advertised in the station manifest.
+
+    Without a readable partition table the fixed v0.2.0 layout is the only
+    information available, so it is used as a compatibility fallback. As soon as
+    the table can be read it is the single source of truth: a table without a
+    data partition advertises no filesystem at all, because a manifest that
+    points the flasher at a region the table does not define would offer to read
+    a ``/log.csv`` that cannot exist.
+    """
     path = partition_csv if partition_csv is not None else DEFAULT_PARTITION_CSV
     if not path.is_file():
         return [dict(entry) for entry in STATION_FILESYSTEMS]
@@ -178,7 +224,7 @@ def station_filesystems(partition_csv: Path | None = None) -> list[dict]:
         if entry.type == "data" and entry.subtype in ("spiffs", "littlefs")
     ]
     if not entries:
-        return [dict(entry) for entry in STATION_FILESYSTEMS]
+        return []
 
     return [
         {
@@ -388,7 +434,9 @@ def build_release(
         manifest["variant"] = naming.key
         manifest["variantLabel"] = naming.label
     if variant == "station":
-        manifest["filesystems"] = station_filesystems(partition_csv)
+        filesystems = station_filesystems(partition_csv)
+        if filesystems:
+            manifest["filesystems"] = filesystems
 
     # Pin wiring (pins.json) is optional so manifests produced before it existed
     # keep exactly the same shape.
@@ -481,7 +529,8 @@ def verify_release(output_dir: Path, manifest_name: str = MANIFEST_FILENAME) -> 
                 )
 
     # A station manifest advertises the LittleFS partition so the flasher can
-    # offer to read /log.csv back; a malformed block would break that offer.
+    # offer to read /log.csv back; a malformed block would break that offer, and
+    # a region outside the flash would make it offer the impossible.
     if "filesystems" in manifest:
         filesystems = manifest["filesystems"]
         if not isinstance(filesystems, list) or not filesystems:
@@ -495,9 +544,18 @@ def verify_release(output_dir: Path, manifest_name: str = MANIFEST_FILENAME) -> 
                     if key not in entry:
                         problems.append(f"filesystems[{index}]: missing {key}")
                 try:
-                    int(str(entry.get("offset")), 16)
+                    offset = int(str(entry.get("offset")), 16)
                 except (TypeError, ValueError):
                     problems.append(f"filesystems[{index}]: bad offset")
+                    continue
+                size = entry.get("size")
+                if not isinstance(size, int) or size <= 0:
+                    problems.append(f"filesystems[{index}]: bad size")
+                elif offset + size > FLASH_SIZE_BYTES:
+                    problems.append(
+                        f"filesystems[{index}]: {entry.get('offset')} + {size} "
+                        f"exceeds the {FLASH_SIZE_BYTES} byte flash"
+                    )
 
     # The pin block is optional, but when it is present it must stay valid and
     # the wiring notes must be displayable strings. Check the key, not the
