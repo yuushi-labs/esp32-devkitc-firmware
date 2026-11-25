@@ -5,7 +5,7 @@
 #include <cstdint>
 
 #ifndef FW_VERSION
-#define FW_VERSION "0.2.0"
+#define FW_VERSION "0.3.0"
 #endif
 
 #ifndef FW_BOARD
@@ -87,6 +87,52 @@ constexpr uint32_t kPressureTrendWindowMs = 30000;
 
 // Gives the DHT sensor time before the first read after power-up.
 constexpr uint32_t kDhtStartupDelayMs = 1500;
+
+// ---------------------------------------------------------------------------
+// Wi-Fi / NTP / web dashboard
+// ---------------------------------------------------------------------------
+
+// Captive portal used until a network has been saved in NVS.
+constexpr const char* kSetupApSsid = "ESP32-Station-AP";
+constexpr const char* kSetupApPassword = "";  // open network, setup only
+
+constexpr uint32_t kWifiConnectTimeoutMs = 15000;
+constexpr uint32_t kWifiRetryIntervalMs = 30000;
+constexpr uint32_t kWifiStatusPollMs = 1000;
+
+constexpr const char* kNtpServer1 = "pool.ntp.org";
+constexpr const char* kNtpServer2 = "time.nist.gov";
+constexpr uint32_t kNtpSyncIntervalMs = 3600000;
+// Japan Standard Time; the CSV timestamp is local time like the OLED clock.
+constexpr int32_t kLocalUtcOffsetSeconds = 9 * 3600;
+
+constexpr uint16_t kWebServerPort = 80;
+// How long the OLED keeps showing the dashboard QR code.
+constexpr uint32_t kQrDisplayDurationMs = 60000;
+
+// ---------------------------------------------------------------------------
+// Bluetooth (NimBLE)
+// ---------------------------------------------------------------------------
+
+constexpr const char* kBleDeviceName = "ESP32-EnvStation";
+constexpr uint32_t kBleNotifyIntervalMs = 2000;
+// HID consumer reports are sent as key-down then key-up; the release follows
+// after this short delay.
+constexpr uint32_t kBleHidReleaseMs = 30;
+// Advertising restarts this long after a client disconnects.
+constexpr uint32_t kBleRestartAdvertisingMs = 500;
+
+// ---------------------------------------------------------------------------
+// OLED graphs and alerts
+// ---------------------------------------------------------------------------
+
+constexpr size_t kGraphCapacity = 64;
+constexpr uint32_t kGraphSampleIntervalMs = 10000;
+
+constexpr float kHighTemperatureAlertC = 30.0f;
+constexpr float kLowHumidityAlertPct = 35.0f;
+constexpr float kPressureJumpAlertHpa = 1.5f;
+constexpr uint32_t kAlertBlinkIntervalMs = 250;
 
 // ---------------------------------------------------------------------------
 // Tester behaviour

@@ -2,6 +2,7 @@
 
 #include <cstdarg>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 
 #include "app_config.h"
@@ -113,20 +114,26 @@ Command parseCommand(const char* line) {
     return command;
   }
 
-  const char* verb = normalised;
-  const char* arg = std::strchr(normalised, ' ');
+  char* arg = std::strchr(normalised, ' ');
   size_t verbLength = arg != nullptr ? static_cast<size_t>(arg - normalised) : out;
   if (arg != nullptr) {
     ++arg;
   }
-  const char* extra = arg != nullptr ? std::strchr(arg, ' ') : nullptr;
+  char* extra = arg != nullptr ? std::strchr(arg, ' ') : nullptr;
+  // Split the third token so `arg` is NUL terminated; `extra` stays non-null
+  // as the "there is a third token" marker.
+  char* extraArg = nullptr;
+  if (extra != nullptr) {
+    *extra = '\0';
+    extraArg = extra + 1;
+  }
 
   char verbText[32] = {0};
   if (verbLength >= sizeof(verbText)) {
     command.type = CommandType::kUnknown;
     return command;
   }
-  std::memcpy(verbText, verb, verbLength);
+  std::memcpy(verbText, normalised, verbLength);
 
   if (equalsIgnoreCase(verbText, "help") && arg == nullptr) {
     command.type = CommandType::kHelp;
@@ -159,9 +166,64 @@ Command parseCommand(const char* line) {
   } else if (equalsIgnoreCase(verbText, "page") && extra == nullptr) {
     if (arg == nullptr) {
       command.type = CommandType::kPageNext;
-    } else if (arg[1] == '\0' && arg[0] >= '1' && arg[0] <= '4') {
+    } else if (arg[1] == '\0' && arg[0] >= '1' && arg[0] <= '6') {
       command.type = CommandType::kPageSelect;
       command.page = static_cast<uint8_t>(arg[0] - '0');
+    } else {
+      command.type = CommandType::kUnknown;
+    }
+  } else if (equalsIgnoreCase(verbText, "wifi") && extra == nullptr) {
+    if (arg == nullptr || equalsIgnoreCase(arg, "status")) {
+      command.type = CommandType::kWifiStatus;
+    } else if (equalsIgnoreCase(arg, "ap")) {
+      command.type = CommandType::kWifiAp;
+    } else if (equalsIgnoreCase(arg, "clear")) {
+      command.type = CommandType::kWifiClear;
+    } else {
+      command.type = CommandType::kUnknown;
+    }
+  } else if (equalsIgnoreCase(verbText, "ble")) {
+    if (arg == nullptr || (equalsIgnoreCase(arg, "status") && extra == nullptr)) {
+      command.type = CommandType::kBleStatus;
+    } else if (equalsIgnoreCase(arg, "hid") && extraArg != nullptr &&
+               std::strchr(extraArg, ' ') == nullptr) {
+      if (equalsIgnoreCase(extraArg, "on")) {
+        command.type = CommandType::kBleHidOn;
+      } else if (equalsIgnoreCase(extraArg, "off")) {
+        command.type = CommandType::kBleHidOff;
+      } else {
+        command.type = CommandType::kUnknown;
+      }
+    } else {
+      command.type = CommandType::kUnknown;
+    }
+  } else if (equalsIgnoreCase(verbText, "timer") && extra == nullptr) {
+    if (arg == nullptr) {
+      command.type = CommandType::kTimerStatus;
+    } else if (equalsIgnoreCase(arg, "start")) {
+      command.type = CommandType::kTimerStart;
+    } else if (equalsIgnoreCase(arg, "pause") || equalsIgnoreCase(arg, "stop")) {
+      command.type = CommandType::kTimerPause;
+    } else if (equalsIgnoreCase(arg, "reset")) {
+      command.type = CommandType::kTimerReset;
+    } else if (arg[0] >= '1' && arg[0] <= '9') {
+      char* end = nullptr;
+      const long minutes = std::strtol(arg, &end, 10);
+      if (end != nullptr && *end == '\0' && minutes >= 1 && minutes <= 60) {
+        command.type = CommandType::kTimerSet;
+        command.timerMinutes = static_cast<uint8_t>(minutes);
+      } else {
+        command.type = CommandType::kUnknown;
+      }
+    } else {
+      command.type = CommandType::kUnknown;
+    }
+  } else if (equalsIgnoreCase(verbText, "mode") && extra == nullptr) {
+    if (arg == nullptr) {
+      command.type = CommandType::kModeStatus;
+    } else if (std::strlen(arg) < sizeof(command.mode)) {
+      command.type = CommandType::kModeSelect;
+      std::snprintf(command.mode, sizeof(command.mode), "%s", arg);
     } else {
       command.type = CommandType::kUnknown;
     }
@@ -216,8 +278,18 @@ const char* commandHelpText(FirmwareTarget target) {
          "  log off    stop recording\n"
          "  log now    write one sample immediately\n"
          "  log clear  delete /log.csv and start over\n"
-         "  page       go to the next page\n"
-         "  page 1..4  jump to a page\n";
+         "  page       go to the next mode\n"
+         "  page 1..6  jump to a mode\n"
+         "  mode       show the current screen and mode\n"
+         "  mode NAME  open env/logs/wifi/ble/timer/system/menu\n"
+         "  wifi       show the Wi-Fi and NTP status\n"
+         "  wifi ap    start the setup access point\n"
+         "  wifi clear forget the saved network\n"
+         "  ble        show the BLE status\n"
+         "  ble hid on|off  media remote mode\n"
+         "  timer      show the countdown timer\n"
+         "  timer N    set 1..60 minutes\n"
+         "  timer start|pause|reset\n";
 }
 
 namespace {

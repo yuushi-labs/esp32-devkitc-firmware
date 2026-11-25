@@ -83,7 +83,7 @@ I2C は 100 kHz。`Wire.setTimeOut(50)` で未接続デバイスによるブロ�
 
 ### 4.4 🌐 Wi-Fi ＆ Web ダッシュボード
 - **初回 Wi-Fi 設定（AP モード / Captive Portal）**:
-  - NVS（`Preferences`）に SSID が未保存の場合、またはユーザーが「Wi-Fi 設定モード」を選んだ場合、AP（例: `ESP32-Station-Setup`）を起動
+  - NVS（`Preferences`）に SSID が未保存の場合、またはユーザーが「Wi-Fi 設定モード」を選んだ場合、AP（`ESP32-Station-AP`）を起動
   - スマホで接続して `http://192.168.4.1/`（またはリダイレクト）を開くと、周辺 SSID スキャン一覧から選んでパスワードを入力・保存し、通常モードへ再接続できる
 - **Web ダッシュボード（`http://<ESP32のIP>/`）**:
   - 外部 CDN に依存しない軽量 HTML/CSS/SVG で完結（オフライン LAN でも動作）
@@ -94,7 +94,7 @@ I2C は 100 kHz。`Wire.setTimeOut(50)` で未接続デバイスによるブロ�
   - `GET /api/logs`: 直近の履歴データ（JSON 配列）
   - Raspberry Pi や他アプリからも連携しやすい構成
 - **OLED QR コード表示**:
-  - Wi-Fi 接続中、Web ページの「QR 表示」を開くと `http://<IP>/` の QR コードを 128x64 OLED に描画し、スマホのカメラで読み取るだけで即開ける
+  - Wi-Fi 接続中に Wi-Fi 画面で `CON` を押すと `http://<IP>/` の QR コードを 128x64 OLED に描画し、スマホのカメラで読み取るだけで即開ける
 
 ### 4.5 📶 Bluetooth（BLE）2 機能
 - Flash / RAM 節約のため **NimBLE**（または軽量 BLE 構成）を採用する
@@ -116,7 +116,7 @@ I2C は 100 kHz。`Wire.setTimeOut(50)` で未接続デバイスによるブロ�
 
 ### 4.7 シリアルコマンド（station）
 - 既存: `scan`, `sensors`, `log`, `log on`, `log off`, `log now`, `log clear`, `page`, `page 1..N`
-- 追加: `wifi status`, `wifi ap`, `wifi clear`, `ble status`, `ble hid on|off`, `timer <min>`, `mode <name>`
+- 追加: `wifi status`, `wifi ap`, `wifi clear`, `ble status`, `ble hid on|off`, `timer <min>`, `timer start|pause|reset`, `mode <name>`
 
 ## 5. 🧪 tester（パーツ動作確認）
 v0.2.0 の仕様をそのまま維持する（I2C 全スキャン・BMP280/DHT テスト・エンコーダ/ボタン導通テスト・シリアル `scan/sensors/inputs`）。

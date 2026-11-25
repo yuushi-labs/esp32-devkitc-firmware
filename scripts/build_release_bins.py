@@ -1,21 +1,29 @@
 #!/usr/bin/env python3
 """Build the release binaries for esp32-devkitc-firmware.
 
-Takes the PlatformIO build output for the ``esp32dev`` environment and produces
-the three assets consumed by the Android flasher:
+Takes the PlatformIO build output for ``esp32dev_station`` (or
+``esp32dev_tester`` with ``--variant tester``) and produces the assets consumed
+by the Android flasher:
 
-* ``esp32-devkitc-firmware-merged.bin`` - bootloader + partitions + boot_app0 +
-  firmware merged into one image based at 0x0000
-* ``esp32-devkitc-firmware-app.bin``    - the application image (0x10000)
-* ``flash-manifest.json``               - offsets, sizes, SHA-256 and version info
+* ``esp32-devkitc-<variant>-merged.bin`` - bootloader + partitions + boot_app0
+  + firmware merged into one image based at 0x0000
+* ``esp32-devkitc-<variant>-app.bin``    - the application image (0x10000)
+* ``flash-manifest.json`` (plus ``tester-flash-manifest.json`` for the tester)
+  - offsets, sizes, SHA-256 and version info
 
 The merge is byte-for-byte equivalent to ``esptool.py merge_bin`` with the
 standard ESP32 layout and the default 0xFF fill, implemented here without extra
 dependencies so it also runs on a bare CI runner.
 
+The station manifest also advertises the LittleFS data partition parsed from
+``no_ota.csv`` so the flasher can pull ``/log.csv`` back out.
+
 Usage:
-    python scripts/build_release_bins.py --build-dir .pio/build/esp32dev \
-        --output-dir dist --version 0.1.0
+    python scripts/build_release_bins.py \
+        --build-dir .pio/build/esp32dev_station --output-dir dist --version 0.3.0
+    python scripts/build_release_bins.py \
+        --build-dir .pio/build/esp32dev_tester --output-dir dist \
+        --version 0.3.0 --variant tester
     python scripts/build_release_bins.py --verify-only --output-dir dist
 
 ``pins.json`` (repository root, or ``--pins PATH``) is validated and embedded
@@ -81,21 +89,22 @@ VARIANTS: dict[str | None, VariantNaming] = {
     ),
 }
 
-# The station firmware logs CSV samples to LittleFS on the standard
-# `default.csv` spiffs partition, so the Android flasher can pull that image
-# back out and read /log.csv.
+# The station firmware logs CSV samples to LittleFS in the data partition of
+# no_ota.csv, so the Android flasher can pull that image back out and read
+# /log.csv. The offset and size are parsed from the partition table at build
+# time; this tuple is only the fallback for a checkout without no_ota.csv.
 STATION_FILESYSTEMS = (
     {
         "type": "littlefs",
         "label": "spiffs",
-        "offset": "0x290000",
-        "size": 0x160000,
+        "offset": "0x210000",
+        "size": 0x1E0000,
         "mountPoint": "/littlefs",
         "format": "csv",
         "logFile": "/log.csv",
         "notes": (
-            "default.csv の spiffs パーティション。station ファームが "
-            "/log.csv (uptime_ms,temp_c,pressure_hpa,humidity_pct) を追記する"
+            "no_ota.csv の spiffs パーティション。station ファームが "
+            "/log.csv (timestamp,uptime_ms,temp_c,pressure_hpa,humidity_pct) を追記する"
         ),
     },
 )
@@ -118,6 +127,75 @@ DEFAULT_VERSION = "0.0.0-dev"
 # pins.json lives at the repository root; the firmware embeds the same file.
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_PINS_PATH = PROJECT_ROOT / "pins.json"
+DEFAULT_PARTITION_CSV = PROJECT_ROOT / "no_ota.csv"
+
+
+@dataclass(frozen=True)
+class PartitionEntry:
+    name: str
+    type: str
+    subtype: str
+    offset: int
+    size: int
+
+
+def load_partition_table(path: Path) -> list[PartitionEntry]:
+    """Parse a PlatformIO/ESP-IDF partition CSV (comments and blanks skipped)."""
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError as exc:
+        raise SystemExit(f"error: cannot read partition table {path}: {exc}") from exc
+
+    entries: list[PartitionEntry] = []
+    for number, raw in enumerate(lines, start=1):
+        line = raw.split("#", 1)[0].strip()
+        if not line:
+            continue
+        fields = [field.strip() for field in line.split(",")]
+        if len(fields) < 5:
+            raise SystemExit(
+                f"error: {path}:{number}: expected at least 5 fields, got {len(fields)}"
+            )
+        name, part_type, subtype, offset, size = fields[:5]
+        try:
+            entries.append(
+                PartitionEntry(name, part_type, subtype, int(offset, 16), int(size, 16))
+            )
+        except ValueError as exc:
+            raise SystemExit(f"error: {path}:{number}: {exc}") from exc
+    return entries
+
+
+def station_filesystems(partition_csv: Path | None = None) -> list[dict]:
+    """LittleFS/SPIFFS data partition advertised in the station manifest."""
+    path = partition_csv if partition_csv is not None else DEFAULT_PARTITION_CSV
+    if not path.is_file():
+        return [dict(entry) for entry in STATION_FILESYSTEMS]
+
+    entries = [
+        entry
+        for entry in load_partition_table(path)
+        if entry.type == "data" and entry.subtype in ("spiffs", "littlefs")
+    ]
+    if not entries:
+        return [dict(entry) for entry in STATION_FILESYSTEMS]
+
+    return [
+        {
+            "type": "littlefs",
+            "label": entry.name,
+            "offset": hex(entry.offset),
+            "size": entry.size,
+            "mountPoint": "/littlefs",
+            "format": "csv",
+            "logFile": "/log.csv",
+            "notes": (
+                f"{path.name} の {entry.name} パーティション。station ファームが "
+                "/log.csv (timestamp,uptime_ms,temp_c,pressure_hpa,humidity_pct) を追記する"
+            ),
+        }
+        for entry in entries
+    ]
 
 
 def sha256_bytes(data: bytes) -> str:
@@ -241,6 +319,7 @@ def build_release(
     boot_app0_path: Path | None = None,
     pin_document: dict | None = None,
     variant: str | None = None,
+    partition_csv: Path | None = None,
 ) -> dict:
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -309,7 +388,7 @@ def build_release(
         manifest["variant"] = naming.key
         manifest["variantLabel"] = naming.label
     if variant == "station":
-        manifest["filesystems"] = [dict(entry) for entry in STATION_FILESYSTEMS]
+        manifest["filesystems"] = station_filesystems(partition_csv)
 
     # Pin wiring (pins.json) is optional so manifests produced before it existed
     # keep exactly the same shape.

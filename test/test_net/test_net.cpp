@@ -1,0 +1,385 @@
+#include <unity.h>
+
+#include <cstdio>
+#include <cstring>
+
+#include "net/ntp_clock.h"
+#include "net/web_dashboard.h"
+#include "net/wifi_credentials.h"
+
+void setUp() {}
+void tearDown() {}
+
+namespace {
+
+using namespace fw;
+
+void test_wifi_validation_rules() {
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(WifiValidation::kOk),
+                        static_cast<int>(validateWifiCredentials("Home", "password1")));
+  // An empty password means an open network.
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(WifiValidation::kOk),
+                        static_cast<int>(validateWifiCredentials("Home", "")));
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(WifiValidation::kOk),
+                        static_cast<int>(validateWifiCredentials("Home", nullptr)));
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(WifiValidation::kEmptySsid),
+                        static_cast<int>(validateWifiCredentials("", "password1")));
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(WifiValidation::kEmptySsid),
+                        static_cast<int>(validateWifiCredentials(nullptr, "password1")));
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(WifiValidation::kPasswordTooShort),
+                        static_cast<int>(validateWifiCredentials("Home", "short")));
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(WifiValidation::kPasswordTooLong),
+                        static_cast<int>(validateWifiCredentials(
+                            "Home", "1234567890123456789012345678901234567890123456789012345678901234")));
+
+  char longSsid[40];
+  std::memset(longSsid, 'a', 33);
+  longSsid[33] = '\0';
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(WifiValidation::kSsidTooLong),
+                        static_cast<int>(validateWifiCredentials(longSsid, "password1")));
+}
+
+void test_credentials_copy_only_when_valid() {
+  WifiCredentials credentials;
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(WifiValidation::kOk),
+                        static_cast<int>(makeWifiCredentials("Cafe", "open sesame", &credentials)));
+  TEST_ASSERT_TRUE(credentials.valid);
+  TEST_ASSERT_EQUAL_STRING("Cafe", credentials.ssid);
+  TEST_ASSERT_EQUAL_STRING("open sesame", credentials.password);
+
+  WifiCredentials invalid;
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(WifiValidation::kEmptySsid),
+                        static_cast<int>(makeWifiCredentials("", "x", &invalid)));
+  TEST_ASSERT_FALSE(invalid.valid);
+}
+
+void test_url_decode_handles_plus_and_percent() {
+  char out[32];
+  TEST_ASSERT_EQUAL_UINT32(10, static_cast<uint32_t>(urlDecode("My+Network", 10, out, sizeof(out))));
+  TEST_ASSERT_EQUAL_STRING("My Network", out);
+  urlDecode("p%40ss%20word", 13, out, sizeof(out));
+  TEST_ASSERT_EQUAL_STRING("p@ss word", out);
+  urlDecode("bad%zz", 6, out, sizeof(out));
+  TEST_ASSERT_EQUAL_STRING("bad%zz", out);
+}
+
+void test_setup_form_parses() {
+  WifiCredentials credentials;
+  WifiValidation error = WifiValidation::kOk;
+  TEST_ASSERT_TRUE(parseWifiSetupForm(
+      "ssid=My+Network&password=p%40ssword", &credentials, &error));
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(WifiValidation::kOk), static_cast<int>(error));
+  TEST_ASSERT_EQUAL_STRING("My Network", credentials.ssid);
+  TEST_ASSERT_EQUAL_STRING("p@ssword", credentials.password);
+
+  TEST_ASSERT_TRUE(parseWifiSetupForm("ssid=Open", &credentials, &error));
+  TEST_ASSERT_EQUAL_STRING("Open", credentials.ssid);
+  TEST_ASSERT_EQUAL_STRING("", credentials.password);
+
+  TEST_ASSERT_FALSE(parseWifiSetupForm("password=password1", &credentials, &error));
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(WifiValidation::kEmptySsid), static_cast<int>(error));
+
+  TEST_ASSERT_FALSE(parseWifiSetupForm("ssid=Home&password=short", &credentials, &error));
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(WifiValidation::kPasswordTooShort),
+                        static_cast<int>(error));
+  TEST_ASSERT_FALSE(parseWifiSetupForm(nullptr, &credentials, &error));
+}
+
+void test_wifi_status_report_formats_local_time() {
+  WifiStatus status;
+  status.mode = WifiMode::kStation;
+  status.connected = true;
+  status.ntpSynced = true;
+  std::snprintf(status.ssid, sizeof(status.ssid), "Home");
+  std::snprintf(status.ip, sizeof(status.ip), "192.168.1.42");
+  status.rssi = -55;
+  status.epochSeconds = 1700000000;
+  status.utcOffsetSeconds = 9 * 3600;
+
+  char out[320];
+  formatWifiStatus(status, out, sizeof(out));
+  TEST_ASSERT_NOT_NULL(std::strstr(out, "wifi: station (connected)"));
+  TEST_ASSERT_NOT_NULL(std::strstr(out, "ssid: Home"));
+  TEST_ASSERT_NOT_NULL(std::strstr(out, "ip: 192.168.1.42"));
+  TEST_ASSERT_NOT_NULL(std::strstr(out, "rssi: -55 dBm"));
+  TEST_ASSERT_NOT_NULL(std::strstr(out, "ntp: 2023-11-15 07:13:20"));
+}
+
+void test_station_url() {
+  char out[32];
+  TEST_ASSERT_EQUAL_UINT32(19, static_cast<uint32_t>(formatStationUrl("192.168.4.1", out, sizeof(out))));
+  TEST_ASSERT_EQUAL_STRING("http://192.168.4.1/", out);
+  formatStationUrl(nullptr, out, sizeof(out));
+  TEST_ASSERT_EQUAL_STRING("http://0.0.0.0/", out);
+}
+
+void test_civil_time_conversion() {
+  CivilTime time = civilTimeFromUnix(0);
+  TEST_ASSERT_EQUAL_INT(1970, time.year);
+  TEST_ASSERT_EQUAL_UINT8(1, time.month);
+  TEST_ASSERT_EQUAL_UINT8(1, time.day);
+  TEST_ASSERT_EQUAL_UINT8(4, time.weekday);
+
+  time = civilTimeFromUnix(1700000000);
+  TEST_ASSERT_EQUAL_INT(2023, time.year);
+  TEST_ASSERT_EQUAL_UINT8(11, time.month);
+  TEST_ASSERT_EQUAL_UINT8(14, time.day);
+  TEST_ASSERT_EQUAL_UINT8(22, time.hour);
+  TEST_ASSERT_EQUAL_UINT8(13, time.minute);
+  TEST_ASSERT_EQUAL_UINT8(20, time.second);
+  TEST_ASSERT_EQUAL_UINT8(2, time.weekday);
+
+  time = civilTimeFromUnix(-1);
+  TEST_ASSERT_EQUAL_INT(1969, time.year);
+  TEST_ASSERT_EQUAL_UINT8(12, time.month);
+  TEST_ASSERT_EQUAL_UINT8(31, time.day);
+  TEST_ASSERT_EQUAL_UINT8(23, time.hour);
+  TEST_ASSERT_EQUAL_UINT8(59, time.minute);
+  TEST_ASSERT_EQUAL_UINT8(59, time.second);
+
+  // Leap day 2024-02-29 00:00:00 UTC.
+  time = civilTimeFromUnix(1709164800);
+  TEST_ASSERT_EQUAL_INT(2024, time.year);
+  TEST_ASSERT_EQUAL_UINT8(2, time.month);
+  TEST_ASSERT_EQUAL_UINT8(29, time.day);
+  TEST_ASSERT_EQUAL_UINT8(0, time.hour);
+}
+
+void test_timestamp_formatting() {
+  char out[24];
+  TEST_ASSERT_EQUAL_UINT32(19, static_cast<uint32_t>(
+                                   formatTimestamp(1700000000, 9 * 3600, out, sizeof(out))));
+  TEST_ASSERT_EQUAL_STRING("2023-11-15 07:13:20", out);
+
+  formatTimestamp(1700000000, 0, out, sizeof(out));
+  TEST_ASSERT_EQUAL_STRING("2023-11-14 22:13:20", out);
+
+  char clock[8];
+  formatClockTime(1700000000, 9 * 3600, clock, sizeof(clock));
+  TEST_ASSERT_EQUAL_STRING("07:13", clock);
+
+  char date[12];
+  formatDate(1700000000, 9 * 3600, date, sizeof(date));
+  TEST_ASSERT_EQUAL_STRING("2023-11-15", date);
+
+  char tiny[4];
+  TEST_ASSERT_TRUE(formatTimestamp(1700000000, 0, tiny, sizeof(tiny)) > sizeof(tiny) - 1);
+  TEST_ASSERT_EQUAL_UINT32(sizeof(tiny) - 1, static_cast<uint32_t>(std::strlen(tiny)));
+}
+
+void test_ntp_clock_extrapolates_and_clears() {
+  NtpClock clock;
+  TEST_ASSERT_FALSE(clock.synced());
+  TEST_ASSERT_EQUAL_INT64(0, clock.epochAt(1234));
+
+  clock.markSynced(1000, 5000);
+  TEST_ASSERT_TRUE(clock.synced());
+  TEST_ASSERT_EQUAL_INT64(1000, clock.epochAt(5000));
+  TEST_ASSERT_EQUAL_INT64(1060, clock.epochAt(65000));
+  TEST_ASSERT_EQUAL_INT64(1000, clock.lastSyncEpoch());
+  TEST_ASSERT_EQUAL_UINT32(5000, clock.lastSyncMs());
+
+  clock.clear();
+  TEST_ASSERT_FALSE(clock.synced());
+  TEST_ASSERT_EQUAL_INT64(0, clock.epochAt(65000));
+}
+
+DashboardState fullState() {
+  DashboardState state;
+  state.version = "0.3.0";
+  state.wifiMode = WifiMode::kStation;
+  state.wifiConnected = true;
+  std::snprintf(state.ssid, sizeof(state.ssid), "Home");
+  std::snprintf(state.ip, sizeof(state.ip), "192.168.1.42");
+  state.rssi = -55;
+  state.ntpSynced = true;
+  std::snprintf(state.timestamp, sizeof(state.timestamp), "2026-11-25 07:37:00");
+  state.logStorageReady = true;
+  state.loggingEnabled = true;
+  state.logRecordCount = 12;
+  state.logIntervalMs = 60000;
+  state.logFileBytes = 1234;
+  state.bleEnabled = true;
+  state.bleHidMode = true;
+  state.bleConnected = false;
+  state.timerRunning = true;
+  std::snprintf(state.timerRemaining, sizeof(state.timerRemaining), "25:00");
+  state.timerPhase = "work";
+  state.mode = "environment";
+  state.uptimeMs = 123456;
+  state.freeHeapBytes = 123456;
+  state.sensors.bmp280Present = true;
+  state.sensors.bmp280Chip = "BMP280";
+  state.sensors.temperatureValid = true;
+  state.sensors.temperatureC = 23.4f;
+  state.sensors.pressureValid = true;
+  state.sensors.pressureHpa = 1006.5f;
+  state.sensors.humidityValid = true;
+  state.sensors.humidityPct = 45.0f;
+  return state;
+}
+
+void test_status_json_contains_every_section() {
+  const DashboardState state = fullState();
+  char out[1536];
+  const size_t needed = formatStatusJson(state, out, sizeof(out));
+  TEST_ASSERT_TRUE(needed < sizeof(out));
+  TEST_ASSERT_EQUAL_UINT32(static_cast<uint32_t>(std::strlen(out)),
+                           static_cast<uint32_t>(needed));
+
+  TEST_ASSERT_NOT_NULL(std::strstr(out, "\"version\":\"0.3.0\""));
+  TEST_ASSERT_NOT_NULL(std::strstr(out, "\"uptime_ms\":123456"));
+  TEST_ASSERT_NOT_NULL(std::strstr(out, "\"free_heap\":123456"));
+  TEST_ASSERT_NOT_NULL(std::strstr(out, "\"mode\":\"environment\""));
+  TEST_ASSERT_NOT_NULL(std::strstr(out, "\"mode\":\"station\""));
+  TEST_ASSERT_NOT_NULL(std::strstr(out, "\"connected\":true"));
+  TEST_ASSERT_NOT_NULL(std::strstr(out, "\"ssid\":\"Home\""));
+  TEST_ASSERT_NOT_NULL(std::strstr(out, "\"ip\":\"192.168.1.42\""));
+  TEST_ASSERT_NOT_NULL(std::strstr(out, "\"rssi\":-55"));
+  TEST_ASSERT_NOT_NULL(std::strstr(out, "\"ntp\":true"));
+  TEST_ASSERT_NOT_NULL(std::strstr(out, "\"time\":\"2026-11-25 07:37:00\""));
+  TEST_ASSERT_NOT_NULL(std::strstr(out, "\"temperature\":23.40"));
+  TEST_ASSERT_NOT_NULL(std::strstr(out, "\"humidity\":45.00"));
+  TEST_ASSERT_NOT_NULL(std::strstr(out, "\"pressure\":1006.50"));
+  TEST_ASSERT_NOT_NULL(std::strstr(out, "\"trend\":\"cloudy\""));
+  TEST_ASSERT_NOT_NULL(std::strstr(out, "\"index\":69.2"));
+  TEST_ASSERT_NOT_NULL(std::strstr(out, "\"label\":\"warm\""));
+  TEST_ASSERT_NOT_NULL(std::strstr(out, "\"high_temperature\":false"));
+  TEST_ASSERT_NOT_NULL(std::strstr(out, "\"low_humidity\":false"));
+  TEST_ASSERT_NOT_NULL(std::strstr(out, "\"pressure_jump\":false"));
+  TEST_ASSERT_NOT_NULL(std::strstr(out, "\"records\":12"));
+  TEST_ASSERT_NOT_NULL(std::strstr(out, "\"interval_ms\":60000"));
+  TEST_ASSERT_NOT_NULL(std::strstr(out, "\"hid\":true"));
+  TEST_ASSERT_NOT_NULL(std::strstr(out, "\"timer\":{\"running\":true"));
+  TEST_ASSERT_NOT_NULL(std::strstr(out, "\"remaining\":\"25:00\""));
+  TEST_ASSERT_NOT_NULL(std::strstr(out, "\"phase\":\"work\""));
+}
+
+void test_status_json_uses_null_for_missing_sensors() {
+  DashboardState state = fullState();
+  state.sensors = SensorSnapshot{};
+  state.ntpSynced = false;
+  state.timestamp[0] = '\0';
+  state.alerts.highTemperature = true;
+  char out[1536];
+  formatStatusJson(state, out, sizeof(out));
+
+  TEST_ASSERT_NOT_NULL(std::strstr(out, "\"temperature\":null"));
+  TEST_ASSERT_NOT_NULL(std::strstr(out, "\"humidity\":null"));
+  TEST_ASSERT_NOT_NULL(std::strstr(out, "\"pressure\":null"));
+  TEST_ASSERT_NOT_NULL(std::strstr(out, "\"comfort\":null"));
+  TEST_ASSERT_NOT_NULL(std::strstr(out, "\"time\":null"));
+  TEST_ASSERT_NOT_NULL(std::strstr(out, "\"high_temperature\":true"));
+}
+
+void test_status_json_escapes_strings() {
+  DashboardState state = fullState();
+  std::snprintf(state.ssid, sizeof(state.ssid), "My \"Net\"\\");
+  char out[1536];
+  formatStatusJson(state, out, sizeof(out));
+  TEST_ASSERT_NOT_NULL(std::strstr(out, "\"ssid\":\"My \\\"Net\\\"\\\\\""));
+}
+
+void test_logs_json_formats_samples() {
+  LogSample samples[2];
+  samples[0].uptimeMs = 1000;
+  samples[0].hasTemperature = true;
+  samples[0].temperatureC = 20.0f;
+  std::snprintf(samples[1].timestamp, sizeof(samples[1].timestamp), "2026-11-25 07:37:00");
+  samples[1].uptimeMs = 2000;
+  samples[1].hasPressure = true;
+  samples[1].pressureHpa = 1000.5f;
+
+  char out[256];
+  formatLogsJson(samples, 2, out, sizeof(out));
+  TEST_ASSERT_EQUAL_STRING(
+      "[{\"t\":null,\"uptime_ms\":1000,\"temp_c\":20.00,\"pressure_hpa\":null,"
+      "\"humidity_pct\":null},{\"t\":\"2026-11-25 07:37:00\",\"uptime_ms\":2000,"
+      "\"temp_c\":null,\"pressure_hpa\":1000.50,\"humidity_pct\":null}]",
+      out);
+}
+
+void test_logs_json_from_csv_keeps_the_newest_rows() {
+  const char* csv =
+      "timestamp,uptime_ms,temp_c,pressure_hpa,humidity_pct\n"
+      "2026-11-25 07:00:00,1000,20.00,1000.00,40.0\n"
+      "2026-11-25 07:01:00,2000,20.50,1000.10,41.0\n"
+      "2026-11-25 07:02:00,3000,21.00,1000.20,42.0\n";
+
+  char out[512];
+  const size_t needed = formatLogsJsonFromCsv(csv, 2, out, sizeof(out));
+  TEST_ASSERT_TRUE(needed < sizeof(out));
+  TEST_ASSERT_NOT_NULL(std::strstr(out, "\"uptime_ms\":2000"));
+  TEST_ASSERT_NOT_NULL(std::strstr(out, "\"uptime_ms\":3000"));
+  TEST_ASSERT_NULL(std::strstr(out, "\"uptime_ms\":1000"));
+
+  formatLogsJsonFromCsv("", 10, out, sizeof(out));
+  TEST_ASSERT_EQUAL_STRING("[]", out);
+  formatLogsJsonFromCsv(nullptr, 10, out, sizeof(out));
+  TEST_ASSERT_EQUAL_STRING("[]", out);
+}
+
+void test_dashboard_html_is_self_contained() {
+  const char* html = dashboardHtml();
+  TEST_ASSERT_NOT_NULL(std::strstr(html, "/api/status"));
+  TEST_ASSERT_NOT_NULL(std::strstr(html, "/api/logs"));
+  TEST_ASSERT_NOT_NULL(std::strstr(html, "/download"));
+  TEST_ASSERT_NOT_NULL(std::strstr(html, "<canvas"));
+  TEST_ASSERT_NOT_NULL(std::strstr(html, "/setup"));
+  TEST_ASSERT_NULL(std::strstr(html, "http://"));
+  TEST_ASSERT_NULL(std::strstr(html, "https://"));
+}
+
+void test_setup_page_lists_and_escapes_networks() {
+  const char* ssids[] = {"Home", "<script>"};
+  char out[4096];
+  const size_t needed = formatSetupPage(ssids, 2, "wrong password", out, sizeof(out));
+  TEST_ASSERT_TRUE(needed < sizeof(out));
+  TEST_ASSERT_NOT_NULL(std::strstr(out, "action=\"/save\""));
+  TEST_ASSERT_NOT_NULL(std::strstr(out, "Nearby networks"));
+  TEST_ASSERT_NOT_NULL(std::strstr(out, "Home"));
+  TEST_ASSERT_NOT_NULL(std::strstr(out, "&lt;script&gt;"));
+  TEST_ASSERT_NULL(std::strstr(out, "<script>"));
+  TEST_ASSERT_NOT_NULL(std::strstr(out, "wrong password"));
+  TEST_ASSERT_NOT_NULL(std::strstr(out, "name=\"password\""));
+}
+
+void test_setup_page_without_networks() {
+  char out[4096];
+  formatSetupPage(nullptr, 0, "", out, sizeof(out));
+  TEST_ASSERT_NOT_NULL(std::strstr(out, "no networks found yet"));
+}
+
+void test_saved_page_escapes_the_ssid() {
+  char out[2048];
+  formatSavedPage("A&B", out, sizeof(out));
+  TEST_ASSERT_NOT_NULL(std::strstr(out, "A&amp;B"));
+  TEST_ASSERT_NOT_NULL(std::strstr(out, "Saved"));
+}
+
+}  // namespace
+
+int main(int argc, char** argv) {
+  (void)argc;
+  (void)argv;
+  UNITY_BEGIN();
+  RUN_TEST(test_wifi_validation_rules);
+  RUN_TEST(test_credentials_copy_only_when_valid);
+  RUN_TEST(test_url_decode_handles_plus_and_percent);
+  RUN_TEST(test_setup_form_parses);
+  RUN_TEST(test_wifi_status_report_formats_local_time);
+  RUN_TEST(test_station_url);
+  RUN_TEST(test_civil_time_conversion);
+  RUN_TEST(test_timestamp_formatting);
+  RUN_TEST(test_ntp_clock_extrapolates_and_clears);
+  RUN_TEST(test_status_json_contains_every_section);
+  RUN_TEST(test_status_json_uses_null_for_missing_sensors);
+  RUN_TEST(test_status_json_escapes_strings);
+  RUN_TEST(test_logs_json_formats_samples);
+  RUN_TEST(test_logs_json_from_csv_keeps_the_newest_rows);
+  RUN_TEST(test_dashboard_html_is_self_contained);
+  RUN_TEST(test_setup_page_lists_and_escapes_networks);
+  RUN_TEST(test_setup_page_without_networks);
+  RUN_TEST(test_saved_page_escapes_the_ssid);
+  return UNITY_END();
+}

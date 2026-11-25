@@ -26,6 +26,9 @@ class TesterApp {
   void loop();
   bool handleCommand(const Command& command);
 
+  // The tester has no alerts; main.cpp uses this for the fast LED blink.
+  bool alertActive() const { return false; }
+
  private:
   void scanBus();
   void pollSensors(uint32_t nowMs);

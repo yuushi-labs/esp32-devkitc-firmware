@@ -193,7 +193,10 @@ void serviceLed(uint32_t nowMs) {
   if (g_ledMode != fw::LedMode::kBlink) {
     return;
   }
-  if (nowMs - g_lastBlinkMs >= fw::kBlinkToggleIntervalMs) {
+  // Sensor alerts and the timer alarm blink faster than the idle heartbeat.
+  const uint32_t interval = g_app.alertActive() ? fw::kAlertBlinkIntervalMs
+                                                : fw::kBlinkToggleIntervalMs;
+  if (nowMs - g_lastBlinkMs >= interval) {
     g_lastBlinkMs = nowMs;
     writeLed(!g_ledState);
   }

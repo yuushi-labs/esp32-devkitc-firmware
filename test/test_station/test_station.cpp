@@ -1,7 +1,10 @@
 #include <unity.h>
 
 #include <cstring>
+#include <string>
 
+#include "app_config.h"
+#include "graphics/mini_graph.h"
 #include "station/station_model.h"
 
 void setUp() {}
@@ -9,247 +12,461 @@ void tearDown() {}
 
 namespace {
 
-using fw::PageLines;
-using fw::PressureTrendTracker;
-using fw::SensorSnapshot;
-using fw::StationController;
-using fw::StationPage;
-using fw::StationView;
+using namespace fw;
 
-StationView makeView() {
+std::string pageText(const PageLines& page) {
+  std::string text;
+  for (size_t index = 0; index < page.count; ++index) {
+    text += page.lines[index].text;
+    text += '\n';
+  }
+  return text;
+}
+
+bool pageHas(const PageLines& page, const char* needle) {
+  for (size_t index = 0; index < page.count; ++index) {
+    if (std::strstr(page.lines[index].text, needle) != nullptr) {
+      return true;
+    }
+  }
+  return false;
+}
+
+SensorSnapshot healthySensors() {
+  SensorSnapshot sensors;
+  sensors.bmp280Present = true;
+  sensors.bmp280Chip = "BMP280";
+  sensors.bmp280Address = 0x76;
+  sensors.temperatureValid = true;
+  sensors.temperatureC = 23.4f;
+  sensors.pressureValid = true;
+  sensors.pressureHpa = 1006.5f;
+  sensors.dhtPresent = true;
+  sensors.dhtType = DhtType::kDht22;
+  sensors.humidityValid = true;
+  sensors.humidityPct = 45.0f;
+  sensors.dhtTemperatureC = 22.9f;
+  return sensors;
+}
+
+StationView healthyView() {
   StationView view;
-  view.version = "0.2.0";
-  view.sensors.bmp280Present = true;
-  view.sensors.bmp280Chip = "BMP280";
-  view.sensors.bmp280Address = 0x76;
-  view.sensors.temperatureValid = true;
-  view.sensors.temperatureC = 23.44f;
-  view.sensors.pressureValid = true;
-  view.sensors.pressureHpa = 1006.532f;
-  view.sensors.pressureTrend = 1;
-  view.sensors.dhtPresent = true;
-  view.sensors.dhtType = fw::DhtType::kDht22;
-  view.sensors.humidityValid = true;
-  view.sensors.humidityPct = 45.04f;
-  view.sensors.dhtTemperatureC = 23.1f;
-
+  view.version = "0.3.0";
+  view.sensors = healthySensors();
   view.loggingEnabled = true;
   view.logStorageReady = true;
   view.logRecordCount = 12;
   view.logIntervalMs = 60000;
   view.logIntervalRemainingMs = 42000;
   view.logFileBytes = 1234;
-  view.oledAddress = 0x3C;
-  std::strcpy(view.i2cAddresses, "0x3C,0x76");
   view.uptimeMs = 3723000;
   view.freeHeapBytes = 123456;
+  view.oledAddress = 0x3C;
+  std::snprintf(view.i2cAddresses, sizeof(view.i2cAddresses), "0x3C,0x76");
   view.dhtPin = 4;
+  std::snprintf(view.clock, sizeof(view.clock), "12:34");
   return view;
 }
 
-void assertContains(const char* haystack, const char* needle) {
-  TEST_ASSERT_NOT_NULL_MESSAGE(std::strstr(haystack, needle), needle);
-}
+void test_menu_lists_six_modes_with_cursor() {
+  StationView view = healthyView();
+  view.menuSelection = StationMode::kWifi;
+  view.wifiConnected = true;
+  std::snprintf(view.ip, sizeof(view.ip), "192.168.1.42");
 
-void test_page_names_and_rotation() {
-  TEST_ASSERT_EQUAL_STRING("summary", fw::stationPageName(StationPage::kSummary));
-  TEST_ASSERT_EQUAL_STRING("sensors", fw::stationPageName(StationPage::kSensorDetail));
-  TEST_ASSERT_EQUAL_STRING("logs", fw::stationPageName(StationPage::kLogs));
-  TEST_ASSERT_EQUAL_STRING("system", fw::stationPageName(StationPage::kSystem));
-
-  TEST_ASSERT_EQUAL_INT(static_cast<int>(StationPage::kSensorDetail),
-                        static_cast<int>(fw::nextStationPage(StationPage::kSummary)));
-  TEST_ASSERT_EQUAL_INT(static_cast<int>(StationPage::kSummary),
-                        static_cast<int>(fw::nextStationPage(StationPage::kSystem)));
-  TEST_ASSERT_EQUAL_INT(static_cast<int>(StationPage::kSystem),
-                        static_cast<int>(fw::previousStationPage(StationPage::kSummary)));
-  TEST_ASSERT_EQUAL_INT(static_cast<int>(StationPage::kLogs),
-                        static_cast<int>(fw::previousStationPage(StationPage::kSystem)));
-}
-
-void test_summary_page_shows_the_readings() {
   PageLines page;
-  fw::buildStationPage(StationPage::kSummary, makeView(), &page);
+  buildStationMenu(view, &page);
+  TEST_ASSERT_EQUAL_UINT32(8, page.count);
+  TEST_ASSERT_EQUAL_STRING("STATION MENU", page.lines[0].text);
+  TEST_ASSERT_EQUAL_STRING(" 1 ENV MONITOR", page.lines[1].text);
+  TEST_ASSERT_EQUAL_STRING(" 2 LOG LittleFS", page.lines[2].text);
+  TEST_ASSERT_EQUAL_STRING(">3 WIFI & WEB", page.lines[3].text);
+  TEST_ASSERT_EQUAL_STRING(" 4 BLUETOOTH", page.lines[4].text);
+  TEST_ASSERT_EQUAL_STRING(" 5 TIMER", page.lines[5].text);
+  TEST_ASSERT_EQUAL_STRING(" 6 SYSTEM", page.lines[6].text);
+  TEST_ASSERT_EQUAL_STRING("12:34 192.168.1.42", page.lines[7].text);
+  TEST_ASSERT_TRUE(page.height() <= Framebuffer::kHeight);
+}
 
-  TEST_ASSERT_EQUAL_UINT32(5, static_cast<uint32_t>(page.count));
+void test_menu_footer_reports_offline_mode() {
+  StationView view = healthyView();
+  view.wifiConnected = false;
+  PageLines page;
+  buildStationMenu(view, &page);
+  TEST_ASSERT_EQUAL_STRING("12:34 wifi off", page.lines[7].text);
+}
+
+void test_environment_summary_shows_every_reading() {
+  StationView view = healthyView();
+  PageLines page;
+  buildStationPage(StationMode::kEnvironment, view, &page);
+
   TEST_ASSERT_EQUAL_STRING("ENV STATION", page.lines[0].text);
   TEST_ASSERT_EQUAL_UINT8(2, page.lines[1].scale);
-  assertContains(page.lines[1].text, "23.4");
-  assertContains(page.lines[1].text, "C");
-  assertContains(page.lines[2].text, "1006.5 hPa");
-  assertContains(page.lines[3].text, "45.0 %");
-  assertContains(page.lines[3].text, "DHT22");
-  assertContains(page.lines[4].text, "REC 12");
-  TEST_ASSERT_TRUE(page.height() <= 64);
+  TEST_ASSERT_TRUE(pageHas(page, "23.4"));
+  TEST_ASSERT_TRUE(pageHas(page, "1006.5 hPa steady"));
+  TEST_ASSERT_TRUE(pageHas(page, "45.0 % DHT22"));
+  TEST_ASSERT_TRUE(pageHas(page, "warm/cloudy"));
+  TEST_ASSERT_TRUE(pageHas(page, "REC 12 n42s"));
+  TEST_ASSERT_TRUE(pageHas(page, "alert none"));
+  TEST_ASSERT_TRUE(page.height() <= Framebuffer::kHeight);
 }
 
-void test_summary_page_marks_a_pause_and_a_missing_sensor() {
-  StationView view;
-  view.sensors.bmp280Present = false;
-  view.loggingEnabled = false;
-  view.logRecordCount = 3;
-
+void test_environment_summary_handles_missing_sensors() {
+  StationView view = healthyView();
+  view.sensors = SensorSnapshot{};
   PageLines page;
-  fw::buildStationPage(StationPage::kSummary, view, &page);
-
-  assertContains(page.lines[1].text, "--.-");
-  TEST_ASSERT_EQUAL_STRING("---.- hPa", page.lines[2].text);
-  TEST_ASSERT_EQUAL_STRING("humidity: none", page.lines[3].text);
-  assertContains(page.lines[4].text, "PAUSED 3");
+  buildStationPage(StationMode::kEnvironment, view, &page);
+  TEST_ASSERT_TRUE(pageHas(page, "--.-"));
+  TEST_ASSERT_TRUE(pageHas(page, "---.- hPa"));
+  TEST_ASSERT_TRUE(pageHas(page, "humidity: none"));
+  TEST_ASSERT_TRUE(pageHas(page, "weather cloudy"));
 }
 
-void test_detail_page_reports_the_bmp280_and_dht() {
-  PageLines page;
-  fw::buildStationPage(StationPage::kSensorDetail, makeView(), &page);
+void test_environment_summary_shows_alerts() {
+  StationView view = healthyView();
+  view.sensors.temperatureC = 31.0f;
+  view.sensors.humidityPct = 30.0f;
+  view.pressureDeltaHpa = 2.0f;
 
-  TEST_ASSERT_EQUAL_STRING("BMP280 0x76", page.lines[0].text);
-  assertContains(page.lines[1].text, "T 23.44");
-  assertContains(page.lines[2].text, "P 1006.53 hPa");
-  TEST_ASSERT_EQUAL_STRING("trend rising", page.lines[3].text);
-  assertContains(page.lines[4].text, "DHT22 45.0 %");
-  assertContains(page.lines[5].text, "poll 2.0 s");
-  TEST_ASSERT_EQUAL_STRING("trend rising", page.lines[3].text);
+  PageLines page;
+  buildStationPage(StationMode::kEnvironment, view, &page);
+  TEST_ASSERT_TRUE(pageHas(page, "HOT31.0"));
+  TEST_ASSERT_TRUE(pageHas(page, "DRY30"));
+  TEST_ASSERT_TRUE(pageHas(page, "PJMP"));
 }
 
-void test_detail_page_handles_missing_parts() {
-  StationView view;
-  view.sensors.dhtPresent = true;  // answered but produced no valid frame
-  view.sensors.temperatureValid = false;
-  view.sensors.pressureValid = false;
+void test_environment_detail_shows_trend_and_comfort() {
+  StationView view = healthyView();
+  view.envView = EnvView::kDetail;
+  view.sensors.pressureTrend = 1;
+  view.pressureDeltaHpa = 2.0f;
 
   PageLines page;
-  fw::buildStationPage(StationPage::kSensorDetail, view, &page);
-
-  TEST_ASSERT_EQUAL_STRING("BMP280 not found", page.lines[0].text);
-  TEST_ASSERT_EQUAL_STRING("T --.--", page.lines[1].text);
-  TEST_ASSERT_EQUAL_STRING("P ------ hPa", page.lines[2].text);
-  TEST_ASSERT_EQUAL_STRING("trend steady", page.lines[3].text);
-  TEST_ASSERT_EQUAL_STRING("DHT no answer", page.lines[4].text);
+  buildStationPage(StationMode::kEnvironment, view, &page);
+  TEST_ASSERT_TRUE(pageHas(page, "BMP280 0x76"));
+  TEST_ASSERT_TRUE(pageHas(page, "trend rising +2.0"));
+  TEST_ASSERT_TRUE(pageHas(page, "DI 69.2 warm"));
+  TEST_ASSERT_TRUE(pageHas(page, "DHT22 45.0 % 22.9"));
 }
 
-void test_logs_page_shows_state_and_interval() {
+void test_logs_page_reports_ntp_and_file() {
+  StationView view = healthyView();
+  view.ntpSynced = true;
   PageLines page;
-  fw::buildStationPage(StationPage::kLogs, makeView(), &page);
+  buildStationPage(StationMode::kLogs, view, &page);
 
   TEST_ASSERT_EQUAL_STRING("LOG littlefs", page.lines[0].text);
-  TEST_ASSERT_EQUAL_STRING("state REC", page.lines[1].text);
-  TEST_ASSERT_EQUAL_STRING("records 12", page.lines[2].text);
-  TEST_ASSERT_EQUAL_STRING("every 1 min", page.lines[3].text);
-  TEST_ASSERT_EQUAL_STRING("next 42 s", page.lines[4].text);
-  TEST_ASSERT_EQUAL_STRING("size 1234 B", page.lines[5].text);
-  TEST_ASSERT_EQUAL_STRING("/log.csv", page.lines[6].text);
-  TEST_ASSERT_TRUE(page.height() <= 64);
+  TEST_ASSERT_TRUE(pageHas(page, "state REC"));
+  TEST_ASSERT_TRUE(pageHas(page, "records 12"));
+  TEST_ASSERT_TRUE(pageHas(page, "every 1 min"));
+  TEST_ASSERT_TRUE(pageHas(page, "next 42 s"));
+  TEST_ASSERT_TRUE(pageHas(page, "size 1234 B"));
+  TEST_ASSERT_TRUE(pageHas(page, "time ntp"));
+  TEST_ASSERT_TRUE(pageHas(page, "/log.csv"));
 }
 
-void test_logs_page_handles_a_missing_filesystem() {
-  StationView view;
-  view.loggingEnabled = false;
-  view.logStorageReady = false;
+void test_wifi_page_station_and_setup() {
+  StationView view = healthyView();
+  view.wifiMode = WifiMode::kStation;
+  view.wifiConnected = true;
+  std::snprintf(view.wifiSsid, sizeof(view.wifiSsid), "Home");
+  std::snprintf(view.ip, sizeof(view.ip), "192.168.1.42");
+  view.rssi = -55;
+  view.ntpSynced = true;
 
   PageLines page;
-  fw::buildStationPage(StationPage::kLogs, view, &page);
+  buildStationPage(StationMode::kWifi, view, &page);
+  TEST_ASSERT_EQUAL_STRING("WIFI STATION", page.lines[0].text);
+  TEST_ASSERT_TRUE(pageHas(page, "ssid Home"));
+  TEST_ASSERT_TRUE(pageHas(page, "ip 192.168.1.42"));
+  TEST_ASSERT_TRUE(pageHas(page, "rssi -55 dBm"));
+  TEST_ASSERT_TRUE(pageHas(page, "time 12:34"));
+  TEST_ASSERT_TRUE(pageHas(page, "CON show QR"));
 
-  TEST_ASSERT_EQUAL_STRING("state PAUSED", page.lines[1].text);
-  TEST_ASSERT_EQUAL_STRING("next -- s", page.lines[4].text);
-  TEST_ASSERT_EQUAL_STRING("fs not ready", page.lines[6].text);
+  view.wifiMode = WifiMode::kAccessPoint;
+  buildStationPage(StationMode::kWifi, view, &page);
+  TEST_ASSERT_EQUAL_STRING("WIFI SETUP (AP)", page.lines[0].text);
+  TEST_ASSERT_TRUE(pageHas(page, kSetupApSsid));
+  TEST_ASSERT_TRUE(pageHas(page, "http://192.168.4.1/"));
 }
 
-void test_system_page_lists_the_bus_and_the_build() {
+void test_ble_page_reflects_hid_mode() {
+  StationView view = healthyView();
+  view.bleEnabled = true;
+  view.bleHidMode = false;
+  view.bleConnected = true;
+
   PageLines page;
-  fw::buildStationPage(StationPage::kSystem, makeView(), &page);
+  buildStationPage(StationMode::kBle, view, &page);
+  TEST_ASSERT_EQUAL_STRING("BLE ON", page.lines[0].text);
+  TEST_ASSERT_TRUE(pageHas(page, "hid off"));
+  TEST_ASSERT_TRUE(pageHas(page, "link connected"));
+  TEST_ASSERT_TRUE(pageHas(page, "PSH HID on"));
 
-  TEST_ASSERT_EQUAL_STRING("SYSTEM v0.2.0", page.lines[0].text);
-  TEST_ASSERT_EQUAL_STRING("up 1h02m03s", page.lines[1].text);
-  TEST_ASSERT_EQUAL_STRING("heap 123456 B", page.lines[2].text);
-  TEST_ASSERT_EQUAL_STRING("i2c 0x3C,0x76", page.lines[3].text);
-  TEST_ASSERT_EQUAL_STRING("oled 0x3C", page.lines[4].text);
-  TEST_ASSERT_EQUAL_STRING("sensor BMP280", page.lines[5].text);
-  TEST_ASSERT_EQUAL_STRING("log ready", page.lines[6].text);
+  view.bleHidMode = true;
+  buildStationPage(StationMode::kBle, view, &page);
+  TEST_ASSERT_TRUE(pageHas(page, "hid media remote"));
+  TEST_ASSERT_TRUE(pageHas(page, "PSH play  CON next"));
+  TEST_ASSERT_TRUE(pageHas(page, "BAK prev  hold menu"));
 }
 
-void test_pressure_trend_uses_the_window() {
+void test_timer_page_has_big_readout_and_progress() {
+  StationView view = healthyView();
+  std::snprintf(view.timerRemaining, sizeof(view.timerRemaining), "25:00");
+  view.timerRunning = true;
+  view.timerProgress = 40;
+  view.timerPomodoro = true;
+  view.timerPhase = "work";
+
+  PageLines page;
+  buildStationPage(StationMode::kTimer, view, &page);
+  TEST_ASSERT_EQUAL_STRING("TIMER POMODORO", page.lines[0].text);
+  TEST_ASSERT_EQUAL_STRING("25:00", page.lines[1].text);
+  TEST_ASSERT_EQUAL_UINT8(2, page.lines[1].scale);
+  TEST_ASSERT_TRUE(pageHas(page, "work running"));
+  TEST_ASSERT_TRUE(pageHas(page, "[####------] 40%"));
+  TEST_ASSERT_TRUE(page.height() <= Framebuffer::kHeight);
+}
+
+void test_system_page_lists_links_and_storage() {
+  StationView view = healthyView();
+  view.wifiConnected = true;
+  std::snprintf(view.ip, sizeof(view.ip), "192.168.1.42");
+  view.bleEnabled = true;
+
+  PageLines page;
+  buildStationPage(StationMode::kSystem, view, &page);
+  TEST_ASSERT_EQUAL_STRING("SYSTEM v0.3.0", page.lines[0].text);
+  TEST_ASSERT_TRUE(pageHas(page, "up 1h02m03s"));
+  TEST_ASSERT_TRUE(pageHas(page, "heap 123456 B"));
+  TEST_ASSERT_TRUE(pageHas(page, "i2c 0x3C,0x76"));
+  TEST_ASSERT_TRUE(pageHas(page, "oled 0x3C"));
+  TEST_ASSERT_TRUE(pageHas(page, "wifi 192.168.1.42"));
+  TEST_ASSERT_TRUE(pageHas(page, "ble on"));
+  TEST_ASSERT_TRUE(pageHas(page, "log ready"));
+}
+
+void test_mode_names_and_cycle() {
+  TEST_ASSERT_EQUAL_STRING("environment", stationModeName(StationMode::kEnvironment));
+  TEST_ASSERT_EQUAL_STRING("logs", stationModeName(StationMode::kLogs));
+  TEST_ASSERT_EQUAL_STRING("wifi", stationModeName(StationMode::kWifi));
+  TEST_ASSERT_EQUAL_STRING("ble", stationModeName(StationMode::kBle));
+  TEST_ASSERT_EQUAL_STRING("timer", stationModeName(StationMode::kTimer));
+  TEST_ASSERT_EQUAL_STRING("system", stationModeName(StationMode::kSystem));
+
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(StationMode::kLogs),
+                        static_cast<int>(nextStationMode(StationMode::kEnvironment)));
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(StationMode::kEnvironment),
+                        static_cast<int>(nextStationMode(StationMode::kSystem)));
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(StationMode::kSystem),
+                        static_cast<int>(previousStationMode(StationMode::kEnvironment)));
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(StationMode::kEnvironment),
+                        static_cast<int>(stationModeFromIndex(6)));
+}
+
+void test_mode_names_parse() {
+  StationMode mode = StationMode::kSystem;
+  TEST_ASSERT_TRUE(stationModeFromName("env", &mode));
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(StationMode::kEnvironment), static_cast<int>(mode));
+  TEST_ASSERT_TRUE(stationModeFromName("ENVIRONMENT", &mode));
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(StationMode::kEnvironment), static_cast<int>(mode));
+  TEST_ASSERT_TRUE(stationModeFromName("log", &mode));
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(StationMode::kLogs), static_cast<int>(mode));
+  TEST_ASSERT_TRUE(stationModeFromName("bluetooth", &mode));
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(StationMode::kBle), static_cast<int>(mode));
+  TEST_ASSERT_TRUE(stationModeFromName("6", &mode));
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(StationMode::kSystem), static_cast<int>(mode));
+  TEST_ASSERT_FALSE(stationModeFromName("7", &mode));
+  TEST_ASSERT_FALSE(stationModeFromName("bogus", &mode));
+  TEST_ASSERT_FALSE(stationModeFromName(nullptr, &mode));
+}
+
+void test_environment_view_cycles() {
+  TEST_ASSERT_EQUAL_STRING("summary", envViewName(EnvView::kSummary));
+  TEST_ASSERT_EQUAL_STRING("graph", envViewName(EnvView::kGraph));
+  TEST_ASSERT_EQUAL_STRING("detail", envViewName(EnvView::kDetail));
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(EnvView::kGraph),
+                        static_cast<int>(nextEnvView(EnvView::kSummary)));
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(EnvView::kSummary),
+                        static_cast<int>(nextEnvView(EnvView::kDetail)));
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(EnvView::kDetail),
+                        static_cast<int>(previousEnvView(EnvView::kSummary)));
+}
+
+void test_controller_navigation() {
+  StationController controller;
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(StationScreen::kMenu),
+                        static_cast<int>(controller.screen()));
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(StationMode::kEnvironment),
+                        static_cast<int>(controller.menuSelection()));
+
+  controller.menuMove(-1);
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(StationMode::kSystem),
+                        static_cast<int>(controller.menuSelection()));
+  controller.menuMove(1);
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(StationMode::kEnvironment),
+                        static_cast<int>(controller.menuSelection()));
+  controller.menuMove(7);
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(StationMode::kLogs),
+                        static_cast<int>(controller.menuSelection()));
+
+  TEST_ASSERT_TRUE(controller.enter());
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(StationScreen::kMode),
+                        static_cast<int>(controller.screen()));
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(StationMode::kLogs),
+                        static_cast<int>(controller.mode()));
+  TEST_ASSERT_FALSE(controller.enter());
+
+  TEST_ASSERT_TRUE(controller.back());
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(StationScreen::kMenu),
+                        static_cast<int>(controller.screen()));
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(StationMode::kLogs),
+                        static_cast<int>(controller.menuSelection()));
+  TEST_ASSERT_FALSE(controller.back());
+
+  TEST_ASSERT_TRUE(controller.selectModeIndex(3));
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(StationMode::kWifi),
+                        static_cast<int>(controller.mode()));
+  TEST_ASSERT_FALSE(controller.selectModeIndex(0));
+  TEST_ASSERT_FALSE(controller.selectModeIndex(7));
+
+  TEST_ASSERT_TRUE(controller.selectModeByName("menu"));
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(StationScreen::kMenu),
+                        static_cast<int>(controller.screen()));
+  TEST_ASSERT_TRUE(controller.selectModeByName("BLE"));
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(StationMode::kBle),
+                        static_cast<int>(controller.mode()));
+  TEST_ASSERT_FALSE(controller.selectModeByName("bogus"));
+
+  controller.cycleEnvView(1);
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(EnvView::kGraph),
+                        static_cast<int>(controller.envView()));
+  controller.cycleEnvView(-1);
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(EnvView::kSummary),
+                        static_cast<int>(controller.envView()));
+  controller.cycleEnvView(-1);
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(EnvView::kDetail),
+                        static_cast<int>(controller.envView()));
+}
+
+void test_pressure_trend_tracker_uses_the_window() {
   PressureTrendTracker tracker;
   tracker.update(1000.0f, 0);
-  TEST_ASSERT_EQUAL_INT8(0, tracker.trend());
+  TEST_ASSERT_EQUAL_INT(0, tracker.trend());
+  TEST_ASSERT_FLOAT_WITHIN(0.001f, 0.0f, tracker.deltaHpa());
 
-  tracker.update(1000.5f, 10000);  // inside the window, nothing decided yet
-  TEST_ASSERT_EQUAL_INT8(0, tracker.trend());
+  tracker.update(1000.5f, 1000);
+  TEST_ASSERT_EQUAL_INT(0, tracker.trend());
+  TEST_ASSERT_FLOAT_WITHIN(0.001f, 0.5f, tracker.deltaHpa());
 
-  tracker.update(1000.5f, 30000);
-  TEST_ASSERT_EQUAL_INT8(1, tracker.trend());
+  tracker.update(1001.6f, kPressureTrendWindowMs + 1);
+  TEST_ASSERT_EQUAL_INT(1, tracker.trend());
+  TEST_ASSERT_FLOAT_WITHIN(0.001f, 1.6f, tracker.deltaHpa());
 
-  tracker.update(999.9f, 60000);
-  TEST_ASSERT_EQUAL_INT8(-1, tracker.trend());
-
-  tracker.update(999.95f, 90000);
-  TEST_ASSERT_EQUAL_INT8(0, tracker.trend());
+  tracker.update(999.0f, 2 * kPressureTrendWindowMs + 2);
+  TEST_ASSERT_EQUAL_INT(-1, tracker.trend());
+  TEST_ASSERT_FLOAT_WITHIN(0.001f, -2.6f, tracker.deltaHpa());
 
   tracker.reset();
-  TEST_ASSERT_EQUAL_INT8(0, tracker.trend());
+  TEST_ASSERT_EQUAL_INT(0, tracker.trend());
+  TEST_ASSERT_FLOAT_WITHIN(0.001f, 0.0f, tracker.deltaHpa());
 }
 
-void test_controller_covers_every_page() {
+void test_sensor_report_mentions_comfort_weather_and_alert() {
+  StationView view = healthyView();
+  view.sensors.temperatureC = 31.0f;
+  view.sensors.humidityPct = 30.0f;
+  view.sensors.pressureTrend = -1;
+  view.pressureDeltaHpa = 2.0f;
+
+  char buffer[512];
+  formatStationSensorReport(view, buffer, sizeof(buffer));
+  TEST_ASSERT_NOT_NULL(std::strstr(buffer, "bmp280: BMP280 at 0x76"));
+  TEST_ASSERT_NOT_NULL(std::strstr(buffer, "comfort:"));
+  TEST_ASSERT_NOT_NULL(std::strstr(buffer, "weather: rain"));
+  TEST_ASSERT_NOT_NULL(std::strstr(buffer, "alert: HOT 31.0C"));
+  TEST_ASSERT_NOT_NULL(std::strstr(buffer, "P JUMP"));
+}
+
+void test_log_status_report_includes_ntp_and_path() {
+  StationView view = healthyView();
+  char buffer[320];
+  formatStationLogStatus(view, buffer, sizeof(buffer));
+  TEST_ASSERT_NOT_NULL(std::strstr(buffer, "log: littlefs ready"));
+  TEST_ASSERT_NOT_NULL(std::strstr(buffer, "interval: 1 min"));
+  TEST_ASSERT_NOT_NULL(std::strstr(buffer, "timestamp: not synced"));
+  TEST_ASSERT_NOT_NULL(std::strstr(buffer, "/log.csv"));
+
+  view.ntpSynced = true;
+  formatStationLogStatus(view, buffer, sizeof(buffer));
+  TEST_ASSERT_NOT_NULL(std::strstr(buffer, "timestamp: ntp (local time)"));
+}
+
+void test_ble_report_lists_the_gatt_service() {
+  StationView view = healthyView();
+  view.bleEnabled = true;
+  view.bleHidMode = true;
+  view.bleConnected = true;
+  char buffer[384];
+  formatStationBleReport(view, buffer, sizeof(buffer));
+  TEST_ASSERT_NOT_NULL(std::strstr(buffer, "ble: enabled"));
+  TEST_ASSERT_NOT_NULL(std::strstr(buffer, "hid: media remote on"));
+  TEST_ASSERT_NOT_NULL(std::strstr(buffer, "0x181A"));
+  TEST_ASSERT_NOT_NULL(std::strstr(buffer, "link: connected"));
+}
+
+void test_navigation_report() {
   StationController controller;
-  TEST_ASSERT_EQUAL_INT(static_cast<int>(StationPage::kSummary),
-                        static_cast<int>(controller.page()));
-
-  TEST_ASSERT_EQUAL_INT(static_cast<int>(StationPage::kSensorDetail),
-                        static_cast<int>(controller.nextPage()));
-  TEST_ASSERT_EQUAL_INT(static_cast<int>(StationPage::kLogs),
-                        static_cast<int>(controller.nextPage()));
-  TEST_ASSERT_EQUAL_INT(static_cast<int>(StationPage::kSensorDetail),
-                        static_cast<int>(controller.previousPage()));
-
-  TEST_ASSERT_TRUE(controller.selectPage(4));
-  TEST_ASSERT_EQUAL_INT(static_cast<int>(StationPage::kSystem),
-                        static_cast<int>(controller.page()));
-  TEST_ASSERT_TRUE(controller.selectPage(1));
-  TEST_ASSERT_EQUAL_INT(static_cast<int>(StationPage::kSummary),
-                        static_cast<int>(controller.page()));
-
-  TEST_ASSERT_FALSE(controller.selectPage(0));
-  TEST_ASSERT_FALSE(controller.selectPage(5));
-  TEST_ASSERT_EQUAL_INT(static_cast<int>(StationPage::kSummary),
-                        static_cast<int>(controller.page()));
+  controller.selectModeByName("wifi");
+  char buffer[128];
+  formatStationNavigation(controller, buffer, sizeof(buffer));
+  TEST_ASSERT_EQUAL_STRING("screen=mode mode=wifi selection=wifi view=summary\n", buffer);
 }
 
-void test_sensor_report_lists_every_value() {
-  const StationView view = makeView();
-  char out[512];
-  const size_t needed = fw::formatStationSensorReport(view, out, sizeof(out));
+void test_graph_screen_draws_both_series() {
+  GraphBuffer temperature(64);
+  GraphBuffer pressure(64);
+  for (int index = 0; index < 40; ++index) {
+    temperature.push(20.0f + static_cast<float>(index) * 0.1f);
+    pressure.push(1000.0f + static_cast<float>(index) * 0.05f);
+  }
 
-  assertContains(out, "bmp280: BMP280 at 0x76");
-  assertContains(out, "temperature: 23.44 C");
-  assertContains(out, "pressure: 1006.53 hPa (rising)");
-  assertContains(out, "humidity: 45.0 % (DHT22, 23.1 C)");
-  TEST_ASSERT_EQUAL_UINT32(static_cast<uint32_t>(std::strlen(out)),
-                           static_cast<uint32_t>(needed));
+  StationView view = healthyView();
+  view.temperatureGraph = &temperature;
+  view.pressureGraph = &pressure;
+
+  Framebuffer framebuffer;
+  buildStationGraphScreen(view, &framebuffer);
+
+  size_t topPixels = 0;
+  size_t bottomPixels = 0;
+  for (int y = 9; y < 34; ++y) {
+    for (int x = 0; x < Framebuffer::kWidth; ++x) {
+      topPixels += framebuffer.pixel(x, y) ? 1 : 0;
+    }
+  }
+  for (int y = 36; y < Framebuffer::kHeight; ++y) {
+    for (int x = 0; x < Framebuffer::kWidth; ++x) {
+      bottomPixels += framebuffer.pixel(x, y) ? 1 : 0;
+    }
+  }
+  TEST_ASSERT_TRUE(topPixels > 100);
+  TEST_ASSERT_TRUE(bottomPixels > 100);
 }
 
-void test_sensor_report_handles_missing_parts() {
-  StationView view;
-  view.dhtPin = 4;
-  view.sensors.dhtPresent = true;
+void test_graph_screen_without_samples_says_so() {
+  StationView view = healthyView();
+  Framebuffer framebuffer;
+  buildStationGraphScreen(view, &framebuffer);
 
-  char out[512];
-  fw::formatStationSensorReport(view, out, sizeof(out));
-  assertContains(out, "bmp280: not found on 0x76/0x77");
-  assertContains(out, "temperature: unavailable");
-  assertContains(out, "pressure: unavailable");
-  assertContains(out, "humidity: sensor answered but no valid frame");
-}
-
-void test_log_status_report() {
-  const StationView view = makeView();
-  char out[256];
-  fw::formatStationLogStatus(view, out, sizeof(out));
-
-  assertContains(out, "log: littlefs ready");
-  assertContains(out, "state: recording");
-  assertContains(out, "interval: 1 min");
-  assertContains(out, "records: 12");
-  assertContains(out, "size: 1234 B");
-  assertContains(out, "file: /log.csv");
+  size_t dark = 0;
+  for (int y = 20; y < 40; ++y) {
+    for (int x = 0; x < Framebuffer::kWidth; ++x) {
+      dark += framebuffer.pixel(x, y) ? 1 : 0;
+    }
+  }
+  TEST_ASSERT_TRUE(dark > 0);
 }
 
 }  // namespace
@@ -258,18 +475,27 @@ int main(int argc, char** argv) {
   (void)argc;
   (void)argv;
   UNITY_BEGIN();
-  RUN_TEST(test_page_names_and_rotation);
-  RUN_TEST(test_summary_page_shows_the_readings);
-  RUN_TEST(test_summary_page_marks_a_pause_and_a_missing_sensor);
-  RUN_TEST(test_detail_page_reports_the_bmp280_and_dht);
-  RUN_TEST(test_detail_page_handles_missing_parts);
-  RUN_TEST(test_logs_page_shows_state_and_interval);
-  RUN_TEST(test_logs_page_handles_a_missing_filesystem);
-  RUN_TEST(test_system_page_lists_the_bus_and_the_build);
-  RUN_TEST(test_pressure_trend_uses_the_window);
-  RUN_TEST(test_controller_covers_every_page);
-  RUN_TEST(test_sensor_report_lists_every_value);
-  RUN_TEST(test_sensor_report_handles_missing_parts);
-  RUN_TEST(test_log_status_report);
+  RUN_TEST(test_menu_lists_six_modes_with_cursor);
+  RUN_TEST(test_menu_footer_reports_offline_mode);
+  RUN_TEST(test_environment_summary_shows_every_reading);
+  RUN_TEST(test_environment_summary_handles_missing_sensors);
+  RUN_TEST(test_environment_summary_shows_alerts);
+  RUN_TEST(test_environment_detail_shows_trend_and_comfort);
+  RUN_TEST(test_logs_page_reports_ntp_and_file);
+  RUN_TEST(test_wifi_page_station_and_setup);
+  RUN_TEST(test_ble_page_reflects_hid_mode);
+  RUN_TEST(test_timer_page_has_big_readout_and_progress);
+  RUN_TEST(test_system_page_lists_links_and_storage);
+  RUN_TEST(test_mode_names_and_cycle);
+  RUN_TEST(test_mode_names_parse);
+  RUN_TEST(test_environment_view_cycles);
+  RUN_TEST(test_controller_navigation);
+  RUN_TEST(test_pressure_trend_tracker_uses_the_window);
+  RUN_TEST(test_sensor_report_mentions_comfort_weather_and_alert);
+  RUN_TEST(test_log_status_report_includes_ntp_and_path);
+  RUN_TEST(test_ble_report_lists_the_gatt_service);
+  RUN_TEST(test_navigation_report);
+  RUN_TEST(test_graph_screen_draws_both_series);
+  RUN_TEST(test_graph_screen_without_samples_says_so);
   return UNITY_END();
 }
