@@ -205,6 +205,14 @@ bool WifiManager::writeConfigFile(const char* text) {
     LittleFS.remove(kWifiConfigTempPath);
     return false;
   }
+  // Check the staged copy before it replaces the live file: a short flash write
+  // must fail while the previous /wifi.json still exists.
+  char staged[kWifiConfigMaxBytes] = {0};
+  if (!readFileInto(kWifiConfigTempPath, staged, sizeof(staged)) ||
+      std::strcmp(staged, text) != 0) {
+    LittleFS.remove(kWifiConfigTempPath);
+    return false;
+  }
   if (!LittleFS.rename(kWifiConfigTempPath, kWifiConfigPath)) {
     // Filesystems that refuse to rename over an existing name fall back to
     // deleting the old file, but only now that the new one is complete.
@@ -214,13 +222,6 @@ bool WifiManager::writeConfigFile(const char* text) {
       LittleFS.remove(kWifiConfigTempPath);
       return false;
     }
-  }
-  // Read it back: a short flash write must not be reported as saved.
-  char verify[kWifiConfigMaxBytes] = {0};
-  if (!readFileInto(kWifiConfigPath, verify, sizeof(verify)) ||
-      std::strcmp(verify, text) != 0) {
-    LittleFS.remove(kWifiConfigPath);
-    return false;
   }
   littlefsReady_ = true;
   return true;
@@ -353,23 +354,25 @@ bool WifiManager::clearCredentials() {
   }
 
   // A file that cannot be deleted would bring the old network back on the next
-  // boot; replace it with a content that cannot be used instead. The staged
+  // boot; replace it with content that cannot be used instead. The staged
   // temporary file matters too: readConfigFile() adopts it when /wifi.json is
-  // gone, so it has to be neutralised the same way.
+  // gone, so it has to be neutralised first. If that is impossible, /wifi.json
+  // is left in place so the two stores keep telling the same story.
   const char* kUnusableConfig = "{\"version\":1}\n";
   bool fileOk = true;
   if (ensureFileSystem(false)) {
-    if (LittleFS.exists(kWifiConfigPath) && !LittleFS.remove(kWifiConfigPath)) {
+    if (LittleFS.exists(kWifiConfigTempPath) &&
+        !LittleFS.remove(kWifiConfigTempPath) &&
+        !writeRawFile(kWifiConfigTempPath, kUnusableConfig)) {
+      Serial.println("wifi: could not delete or blank /wifi.json.tmp");
+      fileOk = false;
+    }
+    if (fileOk && LittleFS.exists(kWifiConfigPath) &&
+        !LittleFS.remove(kWifiConfigPath)) {
       fileOk = writeConfigFile(kUnusableConfig);
       if (!fileOk) {
         Serial.println("wifi: could not delete or blank /wifi.json");
       }
-    }
-    if (LittleFS.exists(kWifiConfigTempPath) &&
-        !LittleFS.remove(kWifiConfigTempPath) &&
-        !writeRawFile(kWifiConfigTempPath, kUnusableConfig)) {
-      fileOk = false;
-      Serial.println("wifi: could not delete or blank /wifi.json.tmp");
     }
   }
 

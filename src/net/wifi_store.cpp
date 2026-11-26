@@ -197,12 +197,32 @@ class Parser {
               }
               return false;
             }
-            if (value >= 0xD800u && value <= 0xDFFFu) {
-              // Surrogate halves cannot be stored as a UTF-8 character on
-              // their own; a real pair would have to be combined first.
+            if (value >= 0xD800u && value <= 0xDBFFu) {
+              // High surrogate: a JSON pair such as \uD83D\uDE00 (an emoji in
+              // an SSID) is only valid together with the low half.
+              if (cursor_[0] != '\\' || cursor_[1] != 'u') {
+                return false;
+              }
+              cursor_ += 2;
+              unsigned low = 0;
+              for (int index = 0; index < 4; ++index) {
+                const int digit = hexDigit(*cursor_);
+                if (digit < 0) {
+                  return false;
+                }
+                low = low * 16u + static_cast<unsigned>(digit);
+                ++cursor_;
+              }
+              if (low < 0xDC00u || low > 0xDFFFu) {
+                return false;
+              }
+              codePoint = 0x10000u + ((value - 0xD800u) << 10) + (low - 0xDC00u);
+            } else if (value >= 0xDC00u && value <= 0xDFFFu) {
+              // A low surrogate on its own has no meaning.
               return false;
+            } else {
+              codePoint = value;
             }
-            codePoint = value;
             break;
           }
           default:
@@ -216,7 +236,7 @@ class Parser {
       }
       // The file itself holds UTF-8, so a \uXXXX code point is written back as
       // the same UTF-8 bytes the setup form typed instead of one raw byte.
-      char encoded[3] = {0, 0, 0};
+      char encoded[4] = {0, 0, 0, 0};
       size_t encodedLength = 0;
       if (!escapedCharacter) {
         // Bytes >= 0x80 are already UTF-8 in the file; copy them unchanged so
@@ -227,8 +247,15 @@ class Parser {
       } else if (codePoint < 0x800u) {
         encoded[encodedLength++] = static_cast<char>(0xC0u | (codePoint >> 6));
         encoded[encodedLength++] = static_cast<char>(0x80u | (codePoint & 0x3Fu));
-      } else {
+      } else if (codePoint < 0x10000u) {
         encoded[encodedLength++] = static_cast<char>(0xE0u | (codePoint >> 12));
+        encoded[encodedLength++] =
+            static_cast<char>(0x80u | ((codePoint >> 6) & 0x3Fu));
+        encoded[encodedLength++] = static_cast<char>(0x80u | (codePoint & 0x3Fu));
+      } else {
+        encoded[encodedLength++] = static_cast<char>(0xF0u | (codePoint >> 18));
+        encoded[encodedLength++] =
+            static_cast<char>(0x80u | ((codePoint >> 12) & 0x3Fu));
         encoded[encodedLength++] =
             static_cast<char>(0x80u | ((codePoint >> 6) & 0x3Fu));
         encoded[encodedLength++] = static_cast<char>(0x80u | (codePoint & 0x3Fu));
@@ -302,13 +329,60 @@ class Parser {
 
   // Skips a value whose content this version does not use, keeping balanced
   // objects and arrays intact so a future key cannot break the parser.
+  bool skipNumber() {
+    const char* start = cursor_;
+    if (*cursor_ == '-') {
+      ++cursor_;
+    }
+    if (*cursor_ < '0' || *cursor_ > '9') {
+      return false;
+    }
+    while (*cursor_ >= '0' && *cursor_ <= '9') {
+      ++cursor_;
+    }
+    if (*cursor_ == '.') {
+      ++cursor_;
+      if (*cursor_ < '0' || *cursor_ > '9') {
+        return false;
+      }
+      while (*cursor_ >= '0' && *cursor_ <= '9') {
+        ++cursor_;
+      }
+    }
+    if (*cursor_ == 'e' || *cursor_ == 'E') {
+      ++cursor_;
+      if (*cursor_ == '+' || *cursor_ == '-') {
+        ++cursor_;
+      }
+      if (*cursor_ < '0' || *cursor_ > '9') {
+        return false;
+      }
+      while (*cursor_ >= '0' && *cursor_ <= '9') {
+        ++cursor_;
+      }
+    }
+    return cursor_ != start;
+  }
+
+  bool skipLiteral(const char* literal) {
+    const size_t length = std::strlen(literal);
+    if (std::strncmp(cursor_, literal, length) != 0) {
+      return false;
+    }
+    cursor_ += length;
+    return true;
+  }
+
+  // Skips a value whose content this version does not use, following the JSON
+  // grammar: strings, numbers, true/false/null and nested objects/arrays with
+  // matching brackets. An empty value or a stray token is rejected.
   bool skipValue() {
     skipSpace();
     if (*cursor_ == '"') {
       return skipString();
     }
     if (*cursor_ == '{' || *cursor_ == '[') {
-      const char close = *cursor_ == '{' ? '}' : ']';
+      char expected[8] = {0};
       int depth = 0;
       while (*cursor_ != '\0') {
         if (*cursor_ == '"') {
@@ -318,34 +392,32 @@ class Parser {
           continue;
         }
         if (*cursor_ == '{' || *cursor_ == '[') {
-          ++depth;
+          if (depth >= static_cast<int>(sizeof(expected))) {
+            return false;
+          }
+          expected[depth++] = *cursor_ == '{' ? '}' : ']';
           ++cursor_;
           continue;
         }
         if (*cursor_ == '}' || *cursor_ == ']') {
+          if (depth == 0 || expected[depth - 1] != *cursor_) {
+            return false;
+          }
           --depth;
+          ++cursor_;
           if (depth == 0) {
-            if (*cursor_ != close) {
-              return false;
-            }
-            ++cursor_;
             return true;
           }
-          ++cursor_;
           continue;
         }
         ++cursor_;
       }
       return false;
     }
-    // Number, true, false or null: at least one character that is not a
-    // separator, so `"extra":}` cannot be accepted as an empty value.
-    const char* start = cursor_;
-    while (*cursor_ != '\0' && !isSpace(*cursor_) && *cursor_ != ',' &&
-           *cursor_ != '}' && *cursor_ != ']') {
-      ++cursor_;
+    if (skipLiteral("true") || skipLiteral("false") || skipLiteral("null")) {
+      return true;
     }
-    return cursor_ != start;
+    return skipNumber();
   }
 
  private:

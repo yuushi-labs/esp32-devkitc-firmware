@@ -140,6 +140,43 @@ void test_unicode_escapes_become_utf8() {
   TEST_ASSERT_EQUAL_STRING("\xE5\xAE\xB6", parsed.ssid);
 }
 
+void test_unicode_surrogate_pairs() {
+  WifiCredentials parsed;
+  // An emoji in an SSID is a surrogate pair in JSON and four UTF-8 bytes.
+  TEST_ASSERT_TRUE(parseWifiConfigJson(
+      "{\"ssid\":\"\\uD83D\\uDE00\",\"password\":\"12345678\"}", &parsed));
+  TEST_ASSERT_EQUAL_STRING("\xF0\x9F\x98\x80", parsed.ssid);
+  TEST_ASSERT_EQUAL_UINT32(4, static_cast<uint32_t>(std::strlen(parsed.ssid)));
+
+  // A lone high or low surrogate is not a character.
+  TEST_ASSERT_FALSE(parseWifiConfigJson(
+      "{\"ssid\":\"\\uD83D\",\"password\":\"12345678\"}", &parsed));
+  TEST_ASSERT_FALSE(parseWifiConfigJson(
+      "{\"ssid\":\"\\uDE00\",\"password\":\"12345678\"}", &parsed));
+  TEST_ASSERT_FALSE(parseWifiConfigJson(
+      "{\"ssid\":\"\\uD83D1234\",\"password\":\"12345678\"}", &parsed));
+}
+
+void test_unknown_values_must_still_be_json() {
+  WifiCredentials parsed;
+  // Valid literals and numbers are fine.
+  TEST_ASSERT_TRUE(parseWifiConfigJson(
+      "{\"ssid\":\"Home\",\"password\":\"12345678\",\"flag\":true,"
+      "\"ratio\":-1.5e-3,\"none\":null}",
+      &parsed));
+  // Bracket types have to match, also inside an unknown value.
+  TEST_ASSERT_FALSE(parseWifiConfigJson(
+      "{\"ssid\":\"Home\",\"password\":\"12345678\",\"extra\":[{]]}",
+      &parsed));
+  // A bare word that is not a JSON literal is broken.
+  TEST_ASSERT_FALSE(parseWifiConfigJson(
+      "{\"ssid\":\"Home\",\"password\":\"12345678\",\"extra\":garbage}",
+      &parsed));
+  TEST_ASSERT_FALSE(parseWifiConfigJson(
+      "{\"ssid\":\"Home\",\"password\":\"12345678\",\"extra\":01x}",
+      &parsed));
+}
+
 void test_config_json_rejects_overflowed_versions_and_empty_values() {
   WifiCredentials parsed;
   // 4294967297 must not wrap to 1 and pass as version 1.
@@ -276,6 +313,8 @@ int main(int argc, char** argv) {
   RUN_TEST(test_config_json_accepts_any_key_order_and_unknown_keys);
   RUN_TEST(test_config_json_rejects_broken_files);
   RUN_TEST(test_unicode_escapes_become_utf8);
+  RUN_TEST(test_unicode_surrogate_pairs);
+  RUN_TEST(test_unknown_values_must_still_be_json);
   RUN_TEST(test_config_json_rejects_overflowed_versions_and_empty_values);
   RUN_TEST(test_config_json_rejects_a_value_that_does_not_fit);
   RUN_TEST(test_format_reports_a_short_buffer_and_invalid_pairs);
