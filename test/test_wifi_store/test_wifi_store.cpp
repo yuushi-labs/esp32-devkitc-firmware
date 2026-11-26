@@ -82,6 +82,16 @@ void test_config_json_accepts_any_key_order_and_unknown_keys() {
   TEST_ASSERT_TRUE(parseWifiConfigJson("{\"ssid\":\"Home\",\"password\":\"12345678\"}",
                                        &parsed));
 
+  // An escaped key name is the same key: \u0073sid is "ssid".
+  TEST_ASSERT_TRUE(parseWifiConfigJson(
+      "{\"\\u0073sid\":\"Home\",\"password\":\"12345678\"}", &parsed));
+  TEST_ASSERT_EQUAL_STRING("Home", parsed.ssid);
+  // A bad escape or a raw control character inside a key is broken JSON.
+  TEST_ASSERT_FALSE(parseWifiConfigJson(
+      "{\"\\ssid\":\"Home\",\"password\":\"12345678\"}", &parsed));
+  TEST_ASSERT_FALSE(parseWifiConfigJson(
+      "{\"\x01ssid\":\"Home\",\"password\":\"12345678\"}", &parsed));
+
   // A key longer than the key buffer is an unknown key, not a broken file.
   TEST_ASSERT_TRUE(parseWifiConfigJson(
       "{\"an_unknown_key_that_is_long\":{\"nested\":[1,2]},"

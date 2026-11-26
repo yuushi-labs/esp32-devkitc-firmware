@@ -126,7 +126,11 @@ class Parser {
   // embedded NULs and values that do not fit are rejected. `overflowError`
   // names the rule a too long value breaks (SSID or password).
   bool parseString(char* out, size_t outSize, WifiValidation overflowError,
-                   WifiValidation* error) {
+                   WifiValidation* error, bool allowTruncate = false,
+                   bool* truncated = nullptr) {
+    if (truncated != nullptr) {
+      *truncated = false;
+    }
     skipSpace();
     if (*cursor_ != '"') {
       return false;
@@ -232,6 +236,12 @@ class Parser {
       for (size_t index = 0; index < encodedLength; ++index) {
         if (out != nullptr && written + 1 < outSize) {
           out[written] = encoded[index];
+        } else if (allowTruncate) {
+          // Keys may be longer than the comparison buffer: the caller only
+          // needs to know that this cannot be one of the keys it knows.
+          if (truncated != nullptr) {
+            *truncated = true;
+          }
         } else {
           // A shortened name or password must never be saved as if it were the
           // value the user typed.
@@ -242,45 +252,6 @@ class Parser {
         }
         ++written;
       }
-    }
-    return false;
-  }
-
-  // Reads an object key. A key that does not fit is reported as truncated
-  // instead of failing the file: an unknown future key must not make the
-  // stored network unreadable.
-  bool parseKey(char* out, size_t outSize, bool* truncated) {
-    if (truncated != nullptr) {
-      *truncated = false;
-    }
-    skipSpace();
-    if (*cursor_ != '"') {
-      return false;
-    }
-    ++cursor_;
-    size_t written = 0;
-    while (*cursor_ != '\0') {
-      char c = *cursor_;
-      if (c == '\\') {
-        ++cursor_;
-        if (*cursor_ == '\0') {
-          return false;
-        }
-        c = *cursor_;
-      } else if (c == '"') {
-        ++cursor_;
-        if (out != nullptr && outSize > 0) {
-          out[written < outSize ? written : outSize - 1] = '\0';
-        }
-        return true;
-      }
-      if (out != nullptr && written + 1 < outSize) {
-        out[written] = c;
-      } else if (truncated != nullptr) {
-        *truncated = true;
-      }
-      ++written;
-      ++cursor_;
     }
     return false;
   }
@@ -439,10 +410,12 @@ bool parseWifiConfigJson(const char* text, WifiCredentials* out,
   }
   while (true) {
     char key[24] = {0};
-    bool unknownKey = false;
-    if (!parser.parseKey(key, sizeof(key), &unknownKey)) {
+    bool keyTruncated = false;
+    if (!parser.parseString(key, sizeof(key), WifiValidation::kSsidTooLong, error,
+                            true, &keyTruncated)) {
       return false;
     }
+    const bool unknownKey = keyTruncated;
     if (!parser.consume(':')) {
       return false;
     }
