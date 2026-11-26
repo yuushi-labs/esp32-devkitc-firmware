@@ -1,8 +1,12 @@
-// Wi-Fi station / setup access point, NVS credentials and NTP.
+// Wi-Fi station / setup access point, stored credentials and NTP.
 //
 // The manager never blocks: a missing network leaves the station firmware
 // running offline and retries in the background, exactly like SPEC.md §6 asks.
 // SSID scans for the setup page run asynchronously and land in a small cache.
+//
+// The saved network lives in /wifi.json on LittleFS; the older NVS copy is
+// still read and migrated to the file on the first boot after the upgrade, so
+// a station set up with v0.4.0 keeps its network.
 #pragma once
 
 #include <Arduino.h>
@@ -15,6 +19,7 @@
 #include "app_config.h"
 #include "net/ntp_clock.h"
 #include "net/wifi_credentials.h"
+#include "net/wifi_store.h"
 
 namespace fw {
 
@@ -25,8 +30,15 @@ class WifiManager {
 
   bool loadCredentials(WifiCredentials* out) const;
   bool saveCredentials(const WifiCredentials& credentials);
-  void clearCredentials();
+  // Clears both stores; false when one of them could not be cleared (the
+  // station then keeps running instead of pretending the network is gone).
+  bool clearCredentials();
   bool hasStoredCredentials() const { return credentials_.valid; }
+
+  // Where the saved network is kept and whether the file system is mounted.
+  WifiConfigSource configSource() const { return configSource_; }
+  const char* configPath() const { return kWifiConfigPath; }
+  bool littlefsReady() const { return littlefsReady_; }
 
   void startAccessPoint();
   void startStation();
@@ -55,6 +67,17 @@ class WifiManager {
   const NtpClock& clock() const { return clock_; }
 
  private:
+  // Reads /wifi.json first and falls back to NVS, without writing anything.
+  bool loadStored(WifiCredentials* out, WifiConfigSource* source,
+                  bool* migrate) const;
+  bool readFileInto(const char* path, char* out, size_t outSize) const;
+  bool readConfigFile(char* out, size_t outSize) const;
+  bool writeRawFile(const char* path, const char* text);
+  bool writeConfigFile(const char* text);
+  bool restoreConfigFile(const char* previous, bool hadFile);
+  bool readNvsConfig(char* ssid, size_t ssidSize, char* password,
+                     size_t passwordSize) const;
+  bool writeNvsConfig(const WifiCredentials& credentials);
   void updateIp();
   void startNtp();
   void generateSetupPassword();
@@ -63,6 +86,7 @@ class WifiManager {
 
   WifiMode mode_ = WifiMode::kOff;
   WifiCredentials credentials_;
+  WifiConfigSource configSource_ = WifiConfigSource::kNone;
   DNSServer dns_;
   NtpClock clock_;
   char ip_[16] = "0.0.0.0";
@@ -73,6 +97,7 @@ class WifiManager {
   bool dnsStarted_ = false;
   bool ntpStarted_ = false;
   bool wasConnected_ = false;
+  bool littlefsReady_ = false;
   uint32_t connectStartedMs_ = 0;
   uint32_t lastRetryMs_ = 0;
   uint32_t lastScanMs_ = 0;

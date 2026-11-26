@@ -136,6 +136,8 @@ size_t formatStatusJson(const DashboardState& state, char* out, size_t outSize) 
   } else {
     text.appendf("null");
   }
+  text.appendf(",\"storage\":");
+  appendJsonString(text, state.wifiStorage);
   text.appendf("}");
 
   text.appendf(",\"sensors\":{\"bmp280\":");

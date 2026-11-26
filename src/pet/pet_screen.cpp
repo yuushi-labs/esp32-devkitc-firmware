@@ -12,7 +12,9 @@ constexpr int kClockLineY = 0;
 constexpr int kBubbleX = 2;
 constexpr int kBubbleY = 7;
 constexpr int kBubbleWidth = 124;
-constexpr int kBubbleHeight = 24;
+// The bubble is two pixels shorter than in v0.4.0 so the celebrating cat can
+// hop up to five pixels without its ears touching the frame.
+constexpr int kBubbleHeight = 22;
 constexpr int kBubbleClockX = 6;
 constexpr int kBubbleClockY = 11;
 constexpr int kBubbleTextX = 26;
@@ -21,6 +23,10 @@ constexpr int kSpeechY = 22;
 constexpr int kSpriteTop = 34;
 constexpr int kGroundY = 55;
 constexpr int kSensorsY = 56;
+// Where the celebration icons float, to the right and left of the cat.
+constexpr int kIconRightY = 30;
+constexpr int kIconLeftY = 40;
+constexpr int kIconSparkleY = 44;
 
 constexpr uint8_t kSpriteEyeLeftX = 8;
 constexpr uint8_t kSpriteEyeRightX = 14;
@@ -46,6 +52,23 @@ void drawSprite(Framebuffer& framebuffer, const PetSprite& sprite, int x, int y)
       }
     }
   }
+}
+
+int clampInt(int value, int low, int high) {
+  if (value < low) {
+    return low;
+  }
+  if (value > high) {
+    return high;
+  }
+  return value;
+}
+
+// Draws a floating icon, keeping the whole bitmap on the panel.
+void drawIcon(Framebuffer& framebuffer, const PetSprite& icon, int x, int y) {
+  const int left = clampInt(x, 0, Framebuffer::kWidth - icon.width);
+  const int top = clampInt(y, 0, Framebuffer::kHeight - icon.height);
+  drawSprite(framebuffer, icon, left, top);
 }
 
 // Centres `text` at `scale` on the panel and draws it at `y`.
@@ -85,10 +108,35 @@ void drawSleepMarks(Framebuffer& framebuffer, int spriteX) {
   framebuffer.drawText(spriteX + 26, 16, "z");
 }
 
+// Hearts, notes and sparkles that move with the action frames: the panel is
+// monochrome, so the motion is what makes the celebration read as joy.
+void drawCelebrationIcons(Framebuffer& framebuffer, const PetScene& scene) {
+  const int frame = scene.actionFrame & 3;
+  const int leftX = scene.spriteX - 7;
+  const int rightX = scene.spriteX + VirtualPet::kSpriteWidth;
+  if (scene.heartVisible) {
+    drawIcon(framebuffer, kIconHeart, rightX, kIconRightY + frame * 2);
+  }
+  if (scene.noteVisible) {
+    drawIcon(framebuffer, kIconNote, leftX, kIconLeftY - frame * 2);
+  }
+  if (scene.starVisible) {
+    drawIcon(framebuffer, kIconSparkle, rightX, kIconSparkleY - frame * 2);
+  }
+}
+
+// Motion dashes under a stretching cat: the front paws push forward and the
+// body pulls back, which the 24x20 sprite cannot show by itself.
+void drawStretchMarks(Framebuffer& framebuffer, int spriteX, int spriteY) {
+  const int y = spriteY + 15;
+  framebuffer.drawHLine(spriteX - 4, y, 3, true);
+  framebuffer.drawHLine(spriteX + VirtualPet::kSpriteWidth + 1, y, 3, true);
+}
+
 }  // namespace
 
 void drawPetSprite(Framebuffer* out, uint8_t tailFrame, int x, int y,
-                   bool eyesClosed) {
+                   bool eyesClosed, int8_t gaze) {
   if (out == nullptr) {
     return;
   }
@@ -97,6 +145,14 @@ void drawPetSprite(Framebuffer* out, uint8_t tailFrame, int x, int y,
     // The eye holes are 2x2; a lit row across the lower row reads as a blink.
     out->fillRect(x + kSpriteEyeLeftX, y + kSpriteEyeY, 2, 1, true);
     out->fillRect(x + kSpriteEyeRightX, y + kSpriteEyeY, 2, 1, true);
+    return;
+  }
+  if (gaze != 0) {
+    // A single lit pixel inside each eye hole is the pupil; moving it left or
+    // right inside the 2 pixel hole is what makes the cat look around.
+    const int offset = gaze > 0 ? 1 : 0;
+    out->setPixel(x + kSpriteEyeLeftX + offset, y + kSpriteEyeY, true);
+    out->setPixel(x + kSpriteEyeRightX + offset, y + kSpriteEyeY, true);
   }
 }
 
@@ -153,10 +209,31 @@ void drawPetScreen(const PetScene& scene, Framebuffer* out) {
   drawGround(*out);
 
   const int spriteX = scene.spriteX;
-  const int spriteY = kSpriteTop - scene.bob;
-  drawPetSprite(out, scene.tailFrame, spriteX, spriteY, scene.eyesClosed);
-  if (scene.activity == PetActivity::kSleep) {
+  const int spriteY = kSpriteTop - scene.bob - scene.hop;
+  drawPetSprite(out, scene.tailFrame, spriteX, spriteY, scene.eyesClosed,
+                scene.gaze);
+  if (scene.pawRaised) {
+    // A raised front paw beside the muzzle (white on the black background, one
+    // pixel clear of the head), and a white tongue inside the dark mouth hole.
+    out->fillRect(spriteX + 21, spriteY + 7, 3, 3, true);
+    out->fillRect(spriteX + 20, spriteY + 9, 1, 2, true);
+    if (scene.tongueOut) {
+      out->fillRect(spriteX + 12, spriteY + 10, 2, 2, true);
+    }
+  }
+  if (scene.yawning) {
+    // A yawn opens the mouth: the dark muzzle hole is made bigger, which is
+    // what reads as an open mouth on a white cat.
+    out->fillRect(spriteX + 10, spriteY + 9, 4, 2, false);
+  }
+  if (scene.activity == PetActivity::kStretch) {
+    drawStretchMarks(*out, spriteX, spriteY);
+  }
+  if (scene.activity == PetActivity::kSleep || scene.activity == PetActivity::kNap) {
     drawSleepMarks(*out, spriteX);
+  }
+  if (scene.heartVisible || scene.noteVisible || scene.starVisible) {
+    drawCelebrationIcons(*out, scene);
   }
 
   drawCentered(*out, scene.sensors, kSensorsY, 1);

@@ -2,8 +2,9 @@
 //
 // Everything here is pure C++ and a function of the monotonic millisecond
 // counter plus the civil time the NTP clock reports, so the walk cycle, the
-// blink, the night pose and the once-an-hour clock chime are unit tested on the
-// host. The renderer in pet_screen.cpp only turns a PetScene into pixels.
+// stretch/groom/hop/look/nap routine, the blink, the night pose, the once-an-
+// hour clock chime and the reaction to a button are unit tested on the host.
+// The renderer in pet_screen.cpp only turns a PetScene into pixels.
 #pragma once
 
 #include <cstddef>
@@ -19,11 +20,47 @@ enum class PetActivity {
   kWalk = 0,
   kSit,
   kSleep,
-  // The hourly chime: the cat holds up a clock and says the time.
+  // The hourly chime: the cat holds up a clock, hops and throws hearts.
   kClock,
+  // v0.4.1 everyday moves, mixed into the walk/sit routine.
+  kStretch,
+  kJump,
+  kGroom,
+  kLook,
+  kNap,
+  // The reaction to the encoder or PSH on the pet screen.
+  kHappy,
 };
 
 const char* petActivityName(PetActivity activity);
+
+// One step of the daytime routine. The cat walks for a while, sits, and every
+// so often stretches, grooms, hops, looks around or dozes off, so the screen
+// never repeats the same walk/sit loop for long.
+struct PetScheduleStep {
+  PetActivity activity;
+  uint32_t durationMs;
+};
+
+constexpr PetScheduleStep kPetDaySchedule[] = {
+    {PetActivity::kWalk, 10000},    {PetActivity::kSit, 6000},
+    {PetActivity::kWalk, 10000},    {PetActivity::kSit, 6000},
+    {PetActivity::kStretch, 3000},  {PetActivity::kWalk, 10000},
+    {PetActivity::kSit, 6000},      {PetActivity::kGroom, 4000},
+    {PetActivity::kWalk, 10000},    {PetActivity::kSit, 6000},
+    {PetActivity::kJump, 2400},     {PetActivity::kWalk, 10000},
+    {PetActivity::kSit, 6000},      {PetActivity::kLook, 4000},
+    {PetActivity::kNap, 8000},
+};
+constexpr size_t kPetDayScheduleCount =
+    sizeof(kPetDaySchedule) / sizeof(kPetDaySchedule[0]);
+
+// Total length of the routine, in milliseconds.
+uint32_t petDayCycleMs();
+// The step `elapsedMs` falls into, with the time already spent in it.
+PetActivity petScheduledActivity(uint32_t elapsedMs,
+                                 uint32_t* elapsedInStep = nullptr,
+                                 uint32_t* stepLength = nullptr);
 
 // One word for the environment the cat is sitting in.
 enum class PetMood {
@@ -51,6 +88,23 @@ struct PetScene {
   // Left edge of the sprite, in pixels, and the walk bob (0 or 1 pixel up).
   int16_t spriteX = 0;
   uint8_t bob = 0;
+  // Pixels off the ground while stretching up, hopping or celebrating.
+  uint8_t hop = 0;
+  // 0..3 phase of the current action: moves the floating icons so nothing on
+  // the panel stands still.
+  uint8_t actionFrame = 0;
+  // Hearts, notes and sparkles around the cat while it celebrates (the hourly
+  // chime and the reaction to a button).
+  bool heartVisible = false;
+  bool noteVisible = false;
+  bool starVisible = false;
+  // Grooming: a raised paw and the tongue going in and out.
+  bool pawRaised = false;
+  bool tongueOut = false;
+  // Napping: the first moments are a yawn with the mouth open.
+  bool yawning = false;
+  // Looking around: -1 left, 0 straight, +1 right (the pupils follow).
+  int8_t gaze = 0;
   // 0..2: tail up, middle, down (see pet_sprites.h).
   uint8_t tailFrame = 0;
   bool eyesClosed = false;
@@ -63,7 +117,7 @@ struct PetScene {
   bool bubbleVisible = false;
   // "07:00 !" while the chime plays.
   char bubbleText[16] = {0};
-  // Speech line under the clock: the mood phrase, "zzz..." at night.
+  // Speech line under the clock: the mood phrase, "zzz..." while asleep.
   char speech[20] = {0};
   // Compact sensor line for the bottom of the panel, empty without sensors.
   char sensors[20] = {0};
@@ -80,7 +134,8 @@ class VirtualPet {
   // One left-to-right sweep at this speed.
   static constexpr int kWalkPixelsPerSecond = 18;
 
-  // Walk for this long, then sit for this long, then walk again.
+  // The first two steps of the routine, kept as named constants because the
+  // walk phase is what the tests measure the speed against.
   static constexpr uint32_t kWalkPhaseMs = 10000;
   static constexpr uint32_t kSitPhaseMs = 6000;
   static constexpr uint32_t kActivityCycleMs = kWalkPhaseMs + kSitPhaseMs;
@@ -89,6 +144,9 @@ class VirtualPet {
   static constexpr uint32_t kBlinkDurationMs = 180;
   // Tail sways every 400 ms.
   static constexpr uint32_t kTailPeriodMs = 400;
+  // The celebration (chime and reaction) wags the tail and moves the icons
+  // faster than the everyday 400 ms sway.
+  static constexpr uint32_t kCelebrationFrameMs = 220;
   // Noise-free hour range in which the cat sleeps (23:00-05:59).
   static constexpr uint8_t kNightStartHour = 23;
   static constexpr uint8_t kNightEndHour = 6;
@@ -97,6 +155,8 @@ class VirtualPet {
   // plays for 8 s.
   static constexpr uint8_t kChimeWindowSeconds = 20;
   static constexpr uint32_t kChimeDurationMs = 8000;
+  // How long the cat stays happy after the encoder or PSH is used.
+  static constexpr uint32_t kReactionDurationMs = 2400;
 
   VirtualPet();
 
@@ -105,6 +165,12 @@ class VirtualPet {
   // drives the pet's mood and the small readings line.
   void update(uint32_t nowMs, bool timeSynced, const CivilTime& now,
               const SensorSnapshot& sensors);
+
+  // The cat notices the person: a hop, hearts and a happy line for a few
+  // seconds. Called from the encoder and PSH on the pet screen.
+  void interact(uint32_t nowMs);
+  bool reacting() const { return reactionActive_; }
+  uint8_t reactionCount() const { return reactionCount_; }
 
   const PetScene& scene() const { return scene_; }
   PetActivity activity() const { return scene_.activity; }
@@ -123,6 +189,7 @@ class VirtualPet {
  private:
   void startChime(uint32_t nowMs, uint8_t hour);
   void moveSprite(uint32_t nowMs, bool walking);
+  const char* reactionSpeech() const;
 
   PetScene scene_;
   int16_t spriteX_ = kWalkLeft;
@@ -136,6 +203,10 @@ class VirtualPet {
   bool chimeEvent_ = false;
   int lastChimeHour_ = -1;
   int32_t lastChimeStamp_ = -1;
+  uint32_t reactionStartMs_ = 0;
+  uint32_t reactionUntilMs_ = 0;
+  bool reactionActive_ = false;
+  uint8_t reactionCount_ = 0;
   PetMood mood_ = PetMood::kUnknown;
 };
 

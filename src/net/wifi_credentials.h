@@ -66,6 +66,10 @@ struct WifiStatus {
   // Local offset used to render `epochSeconds` in the status report.
   int32_t utcOffsetSeconds = 0;
   uint32_t uptimeMs = 0;
+  // "littlefs" / "nvs" / "none": where the saved network is kept, and the
+  // file used on LittleFS (empty when there is no file copy).
+  const char* storage = "none";
+  const char* storagePath = "";
 };
 
 const char* wifiModeName(WifiMode mode);

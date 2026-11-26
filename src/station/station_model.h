@@ -170,4 +170,34 @@ class StationController {
 size_t formatStationNavigation(const StationController& controller, char* out,
                                size_t outSize);
 
+// The QR code that covers the Wi-Fi page.
+//
+// The code replaces the status page, so BAK has to close the code first and
+// only the next BAK leaves the mode. Entering the Wi-Fi mode always starts on
+// the status page, which is what the v0.4.0 bug got wrong: the flag stayed set
+// after leaving the mode and the page could no longer be left at all.
+class WifiQrState {
+ public:
+  void enterMode() { visible_ = false; }
+  void leaveMode() { visible_ = false; }
+  void show() { visible_ = true; }
+  void hide() { visible_ = false; }
+  // PSH switches between the setup AP and the station: the status page has to
+  // be visible right away so the new mode can be read.
+  void onModeSwitch() { visible_ = false; }
+  bool visible() const { return visible_; }
+  // BAK: true when a visible code was closed and the Wi-Fi page stays; false
+  // when there was no code and the caller leaves for the menu.
+  bool closeOnBack() {
+    if (!visible_) {
+      return false;
+    }
+    visible_ = false;
+    return true;
+  }
+
+ private:
+  bool visible_ = false;
+};
+
 }  // namespace fw

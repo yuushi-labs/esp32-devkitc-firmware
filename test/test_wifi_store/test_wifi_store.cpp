@@ -1,0 +1,342 @@
+#include <unity.h>
+
+#include <algorithm>
+#include <cstring>
+#include <string>
+
+#include "net/wifi_credentials.h"
+#include "net/wifi_store.h"
+
+void setUp() {}
+void tearDown() {}
+
+namespace {
+
+using namespace fw;
+
+WifiCredentials pair(const char* ssid, const char* password) {
+  WifiCredentials credentials;
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(WifiValidation::kOk),
+                        static_cast<int>(makeWifiCredentials(ssid, password, &credentials)));
+  return credentials;
+}
+
+void test_config_json_round_trips() {
+  const WifiCredentials credentials = pair("Home 5G", "hunter2hunter2");
+  char json[kWifiConfigMaxBytes];
+  const size_t needed = formatWifiConfigJson(credentials, json, sizeof(json));
+  TEST_ASSERT_EQUAL_UINT32(static_cast<uint32_t>(std::strlen(json)),
+                           static_cast<uint32_t>(needed));
+  TEST_ASSERT_NOT_NULL(std::strstr(json, "\"version\":1"));
+  TEST_ASSERT_NOT_NULL(std::strstr(json, "\"ssid\":\"Home 5G\""));
+  TEST_ASSERT_NOT_NULL(std::strstr(json, "\"password\":\"hunter2hunter2\""));
+  TEST_ASSERT_EQUAL_CHAR('\n', json[needed - 1]);
+
+  WifiCredentials parsed;
+  TEST_ASSERT_TRUE(parseWifiConfigJson(json, &parsed));
+  TEST_ASSERT_TRUE(parsed.valid);
+  TEST_ASSERT_EQUAL_STRING(credentials.ssid, parsed.ssid);
+  TEST_ASSERT_EQUAL_STRING(credentials.password, parsed.password);
+}
+
+void test_config_json_escapes_quotes_backslashes_and_controls() {
+  // Quotes, backslashes and a control character all survive the file.
+  const WifiCredentials credentials = pair("My \"Net\"\\5G", "pa\\ss\"word\nend");
+  char json[kWifiConfigMaxBytes];
+  const size_t needed = formatWifiConfigJson(credentials, json, sizeof(json));
+  TEST_ASSERT_TRUE(needed > 0 && needed < sizeof(json));
+  TEST_ASSERT_NOT_NULL(std::strstr(json, "\\\"Net\\\""));
+  TEST_ASSERT_NOT_NULL(std::strstr(json, "\\\\ss"));
+  TEST_ASSERT_NOT_NULL(std::strstr(json, "\\n"));
+  // No raw newline inside the string: the file stays one line of JSON with a
+  // single terminating newline.
+  TEST_ASSERT_EQUAL_INT(1, static_cast<int>(std::count(json, json + needed, '\n')));
+  TEST_ASSERT_EQUAL_CHAR('\n', json[needed - 1]);
+
+  WifiCredentials parsed;
+  TEST_ASSERT_TRUE(parseWifiConfigJson(json, &parsed));
+  TEST_ASSERT_EQUAL_STRING(credentials.ssid, parsed.ssid);
+  TEST_ASSERT_EQUAL_STRING(credentials.password, parsed.password);
+}
+
+void test_config_json_keeps_utf8_network_names() {
+  // A Japanese SSID written by the setup form is stored as its UTF-8 bytes.
+  const WifiCredentials credentials = pair("ゆうしの家", "password123");
+  char json[kWifiConfigMaxBytes];
+  formatWifiConfigJson(credentials, json, sizeof(json));
+  WifiCredentials parsed;
+  TEST_ASSERT_TRUE(parseWifiConfigJson(json, &parsed));
+  TEST_ASSERT_EQUAL_STRING(credentials.ssid, parsed.ssid);
+}
+
+void test_config_json_accepts_any_key_order_and_unknown_keys() {
+  const char* text =
+      "{ \"generated\": \"v0.4.1\", \"password\": \"12345678\", \"ssid\": \"Home\","
+      " \"nested\": {\"a\": [1, 2]}, \"version\": 1 }";
+  WifiCredentials parsed;
+  TEST_ASSERT_TRUE(parseWifiConfigJson(text, &parsed));
+  TEST_ASSERT_EQUAL_STRING("Home", parsed.ssid);
+  TEST_ASSERT_EQUAL_STRING("12345678", parsed.password);
+
+  // No version is fine too: an older file without it is still usable.
+  TEST_ASSERT_TRUE(parseWifiConfigJson("{\"ssid\":\"Home\",\"password\":\"12345678\"}",
+                                       &parsed));
+
+  // An escaped key name is the same key: \u0073sid is "ssid".
+  TEST_ASSERT_TRUE(parseWifiConfigJson(
+      "{\"\\u0073sid\":\"Home\",\"password\":\"12345678\"}", &parsed));
+  TEST_ASSERT_EQUAL_STRING("Home", parsed.ssid);
+  // A bad escape or a raw control character inside a key is broken JSON.
+  TEST_ASSERT_FALSE(parseWifiConfigJson(
+      "{\"\\ssid\":\"Home\",\"password\":\"12345678\"}", &parsed));
+  TEST_ASSERT_FALSE(parseWifiConfigJson(
+      "{\"\x01ssid\":\"Home\",\"password\":\"12345678\"}", &parsed));
+
+  // A key longer than the key buffer is an unknown key, not a broken file.
+  TEST_ASSERT_TRUE(parseWifiConfigJson(
+      "{\"an_unknown_key_that_is_long\":{\"nested\":[1,2]},"
+      "\"ssid\":\"Home\",\"password\":\"12345678\"}",
+      &parsed));
+  TEST_ASSERT_EQUAL_STRING("Home", parsed.ssid);
+}
+
+void test_config_json_rejects_broken_files() {
+  WifiCredentials parsed;
+  WifiValidation error = WifiValidation::kOk;
+
+  TEST_ASSERT_FALSE(parseWifiConfigJson("", &parsed, &error));
+  TEST_ASSERT_FALSE(parseWifiConfigJson("{", &parsed));
+  TEST_ASSERT_FALSE(parseWifiConfigJson("{\"ssid\":\"Home\",\"password\":\"1234", &parsed));
+  TEST_ASSERT_FALSE(parseWifiConfigJson("{\"password\":\"12345678\"}", &parsed));
+  TEST_ASSERT_FALSE(parseWifiConfigJson("{\"ssid\":\"Home\"} trailing", &parsed));
+  TEST_ASSERT_FALSE(parseWifiConfigJson(
+      "{\"version\":2,\"ssid\":\"Home\",\"password\":\"12345678\"}", &parsed));
+  TEST_ASSERT_FALSE(parseWifiConfigJson(
+      "{\"ssid\":\"Home\",\"password\":\"short\"}", &parsed, &error));
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(WifiValidation::kPasswordTooShort),
+                        static_cast<int>(error));
+  // An unknown escape must not be guessed.
+  TEST_ASSERT_FALSE(parseWifiConfigJson(
+      "{\"ssid\":\"Ho\\qme\",\"password\":\"12345678\"}", &parsed));
+  // \u0000 would silently end the name.
+  TEST_ASSERT_FALSE(parseWifiConfigJson(
+      "{\"ssid\":\"Ho\\u0000me\",\"password\":\"12345678\"}", &parsed, &error));
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(WifiValidation::kEmbeddedNul),
+                        static_cast<int>(error));
+}
+
+void test_unicode_escapes_become_utf8() {
+  WifiCredentials parsed;
+  // "Caf\u00E9" has to become the same UTF-8 bytes a form would type, so the
+  // station joins the network whose name it shows.
+  TEST_ASSERT_TRUE(parseWifiConfigJson(
+      "{\"ssid\":\"Caf\\u00E9\",\"password\":\"12345678\"}", &parsed));
+  TEST_ASSERT_EQUAL_STRING("Caf\xC3\xA9", parsed.ssid);
+  TEST_ASSERT_EQUAL_UINT32(5, static_cast<uint32_t>(std::strlen(parsed.ssid)));
+
+  // A three byte code point (\u5BB6, "house") too.
+  TEST_ASSERT_TRUE(parseWifiConfigJson(
+      "{\"ssid\":\"\\u5BB6\",\"password\":\"12345678\"}", &parsed));
+  TEST_ASSERT_EQUAL_STRING("\xE5\xAE\xB6", parsed.ssid);
+}
+
+void test_unicode_surrogate_pairs() {
+  WifiCredentials parsed;
+  // An emoji in an SSID is a surrogate pair in JSON and four UTF-8 bytes.
+  TEST_ASSERT_TRUE(parseWifiConfigJson(
+      "{\"ssid\":\"\\uD83D\\uDE00\",\"password\":\"12345678\"}", &parsed));
+  TEST_ASSERT_EQUAL_STRING("\xF0\x9F\x98\x80", parsed.ssid);
+  TEST_ASSERT_EQUAL_UINT32(4, static_cast<uint32_t>(std::strlen(parsed.ssid)));
+
+  // A lone high or low surrogate is not a character.
+  TEST_ASSERT_FALSE(parseWifiConfigJson(
+      "{\"ssid\":\"\\uD83D\",\"password\":\"12345678\"}", &parsed));
+  TEST_ASSERT_FALSE(parseWifiConfigJson(
+      "{\"ssid\":\"\\uDE00\",\"password\":\"12345678\"}", &parsed));
+  TEST_ASSERT_FALSE(parseWifiConfigJson(
+      "{\"ssid\":\"\\uD83D1234\",\"password\":\"12345678\"}", &parsed));
+}
+
+void test_unknown_values_must_still_be_json() {
+  WifiCredentials parsed;
+  // Valid literals and numbers are fine.
+  TEST_ASSERT_TRUE(parseWifiConfigJson(
+      "{\"ssid\":\"Home\",\"password\":\"12345678\",\"flag\":true,"
+      "\"ratio\":-1.5e-3,\"none\":null}",
+      &parsed));
+  // Bracket types have to match, also inside an unknown value.
+  TEST_ASSERT_FALSE(parseWifiConfigJson(
+      "{\"ssid\":\"Home\",\"password\":\"12345678\",\"extra\":[{]]}",
+      &parsed));
+  // A bare word that is not a JSON literal is broken.
+  TEST_ASSERT_FALSE(parseWifiConfigJson(
+      "{\"ssid\":\"Home\",\"password\":\"12345678\",\"extra\":garbage}",
+      &parsed));
+  TEST_ASSERT_FALSE(parseWifiConfigJson(
+      "{\"ssid\":\"Home\",\"password\":\"12345678\",\"extra\":01x}",
+      &parsed));
+  // Inside an array too: a bare word is not a value.
+  TEST_ASSERT_FALSE(parseWifiConfigJson(
+      "{\"ssid\":\"Home\",\"password\":\"12345678\",\"extra\":[garbage]}",
+      &parsed));
+  // A leading zero is not a JSON number.
+  TEST_ASSERT_FALSE(parseWifiConfigJson(
+      "{\"ssid\":\"Home\",\"password\":\"12345678\",\"extra\":01}",
+      &parsed));
+  // Unknown string values still have to use valid escapes.
+  TEST_ASSERT_FALSE(parseWifiConfigJson(
+      "{\"ssid\":\"Home\",\"password\":\"12345678\",\"extra\":\"\\q\"}",
+      &parsed));
+  TEST_ASSERT_TRUE(parseWifiConfigJson(
+      "{\"ssid\":\"Home\",\"password\":\"12345678\",\"extra\":\"a \\u00E9\"}",
+      &parsed));
+}
+
+void test_config_json_rejects_overflowed_versions_and_empty_values() {
+  WifiCredentials parsed;
+  // 4294967297 must not wrap to 1 and pass as version 1.
+  TEST_ASSERT_FALSE(parseWifiConfigJson(
+      "{\"version\":4294967297,\"ssid\":\"Home\",\"password\":\"12345678\"}",
+      &parsed));
+  // A key without a value is not valid JSON, even when the key is unknown.
+  TEST_ASSERT_FALSE(parseWifiConfigJson(
+      "{\"ssid\":\"Home\",\"password\":\"12345678\",\"extra\":}", &parsed));
+  // Mismatched brackets in an unknown value are broken JSON too.
+  TEST_ASSERT_FALSE(parseWifiConfigJson(
+      "{\"ssid\":\"Home\",\"password\":\"12345678\",\"extra\":[1,2}}",
+      &parsed));
+}
+
+void test_config_json_rejects_a_value_that_does_not_fit() {
+  // 33 characters: the file holds a name the SSID field cannot take.
+  std::string text = "{\"ssid\":\"";
+  text += std::string(33, 'a');
+  text += "\",\"password\":\"12345678\"}";
+  WifiCredentials parsed;
+  WifiValidation error = WifiValidation::kOk;
+  TEST_ASSERT_FALSE(parseWifiConfigJson(text.c_str(), &parsed, &error));
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(WifiValidation::kSsidTooLong),
+                        static_cast<int>(error));
+}
+
+void test_format_reports_a_short_buffer_and_invalid_pairs() {
+  const WifiCredentials credentials = pair("Home", "12345678");
+  char small[16];
+  const size_t needed = formatWifiConfigJson(credentials, small, sizeof(small));
+  TEST_ASSERT_TRUE(needed > sizeof(small));
+  TEST_ASSERT_EQUAL_UINT32(static_cast<uint32_t>(std::strlen(small)),
+                           static_cast<uint32_t>(sizeof(small) - 1));
+
+  WifiCredentials invalid;
+  char json[kWifiConfigMaxBytes];
+  TEST_ASSERT_EQUAL_UINT32(0, static_cast<uint32_t>(
+                                  formatWifiConfigJson(invalid, json, sizeof(json))));
+  TEST_ASSERT_EQUAL_STRING("", json);
+
+  // The worst case pair (every byte escaped as \u00XX) still fits the file
+  // buffer the manager uses.
+  const std::string controlSsid(32, '\x01');
+  const std::string controlPassword(63, '\x01');
+  const WifiCredentials worst = pair(controlSsid.c_str(), controlPassword.c_str());
+  const size_t worstLength = formatWifiConfigJson(worst, json, sizeof(json));
+  TEST_ASSERT_TRUE(worstLength > 0);
+  TEST_ASSERT_TRUE(worstLength < sizeof(json));
+  TEST_ASSERT_NOT_NULL(std::strstr(json, "\\u0001"));
+
+  WifiCredentials worstParsed;
+  TEST_ASSERT_TRUE(parseWifiConfigJson(json, &worstParsed));
+  TEST_ASSERT_EQUAL_STRING(controlSsid.c_str(), worstParsed.ssid);
+  TEST_ASSERT_EQUAL_STRING(controlPassword.c_str(), worstParsed.password);
+}
+
+void test_file_copy_wins_over_nvs() {
+  const WifiCredentials filePair = pair("FromFile", "filepass1");
+  char json[kWifiConfigMaxBytes];
+  formatWifiConfigJson(filePair, json, sizeof(json));
+
+  const WifiConfigChoice choice =
+      chooseWifiConfig(json, true, "FromNvs", "nvspass1");
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(WifiConfigSource::kLittleFs),
+                        static_cast<int>(choice.source));
+  TEST_ASSERT_FALSE(choice.migrate);
+  TEST_ASSERT_FALSE(choice.fileRejected);
+  TEST_ASSERT_EQUAL_STRING("FromFile", choice.credentials.ssid);
+  TEST_ASSERT_EQUAL_STRING("filepass1", choice.credentials.password);
+}
+
+void test_nvs_is_used_and_migrated_when_the_file_is_missing() {
+  const WifiConfigChoice choice = chooseWifiConfig(nullptr, true, "FromNvs", "nvspass1");
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(WifiConfigSource::kNvs),
+                        static_cast<int>(choice.source));
+  TEST_ASSERT_TRUE(choice.migrate);
+  TEST_ASSERT_FALSE(choice.fileRejected);
+  TEST_ASSERT_EQUAL_STRING("FromNvs", choice.credentials.ssid);
+
+  // An empty file (a zero byte file left by an interrupted write) is the same.
+  const WifiConfigChoice empty = chooseWifiConfig("", true, "FromNvs", "nvspass1");
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(WifiConfigSource::kNvs),
+                        static_cast<int>(empty.source));
+  TEST_ASSERT_TRUE(empty.migrate);
+}
+
+void test_corrupt_file_falls_back_to_nvs_and_is_flagged() {
+  const WifiConfigChoice choice =
+      chooseWifiConfig("{\"ssid\":", true, "FromNvs", "nvspass1");
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(WifiConfigSource::kNvs),
+                        static_cast<int>(choice.source));
+  TEST_ASSERT_TRUE(choice.migrate);
+  TEST_ASSERT_TRUE(choice.fileRejected);
+  TEST_ASSERT_EQUAL_STRING("FromNvs", choice.credentials.ssid);
+}
+
+void test_nothing_stored_means_no_credentials() {
+  const WifiConfigChoice none = chooseWifiConfig(nullptr, false, "", "");
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(WifiConfigSource::kNone),
+                        static_cast<int>(none.source));
+  TEST_ASSERT_FALSE(none.credentials.valid);
+  TEST_ASSERT_FALSE(none.migrate);
+
+  // A corrupt file without NVS is reported but leaves nothing to connect to.
+  const WifiConfigChoice broken = chooseWifiConfig("{}", false, "", "");
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(WifiConfigSource::kNone),
+                        static_cast<int>(broken.source));
+  TEST_ASSERT_TRUE(broken.fileRejected);
+
+  // An NVS SSID whose password broke the WPA2 rule is not used either.
+  const WifiConfigChoice shortPassword = chooseWifiConfig(nullptr, true, "Home", "short");
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(WifiConfigSource::kNone),
+                        static_cast<int>(shortPassword.source));
+  TEST_ASSERT_FALSE(shortPassword.credentials.valid);
+}
+
+void test_source_names() {
+  TEST_ASSERT_EQUAL_STRING("littlefs", wifiConfigSourceName(WifiConfigSource::kLittleFs));
+  TEST_ASSERT_EQUAL_STRING("nvs", wifiConfigSourceName(WifiConfigSource::kNvs));
+  TEST_ASSERT_EQUAL_STRING("none", wifiConfigSourceName(WifiConfigSource::kNone));
+  TEST_ASSERT_EQUAL_STRING("/wifi.json", kWifiConfigPath);
+}
+
+}  // namespace
+
+int main(int argc, char** argv) {
+  (void)argc;
+  (void)argv;
+  UNITY_BEGIN();
+  RUN_TEST(test_config_json_round_trips);
+  RUN_TEST(test_config_json_escapes_quotes_backslashes_and_controls);
+  RUN_TEST(test_config_json_keeps_utf8_network_names);
+  RUN_TEST(test_config_json_accepts_any_key_order_and_unknown_keys);
+  RUN_TEST(test_config_json_rejects_broken_files);
+  RUN_TEST(test_unicode_escapes_become_utf8);
+  RUN_TEST(test_unicode_surrogate_pairs);
+  RUN_TEST(test_unknown_values_must_still_be_json);
+  RUN_TEST(test_config_json_rejects_overflowed_versions_and_empty_values);
+  RUN_TEST(test_config_json_rejects_a_value_that_does_not_fit);
+  RUN_TEST(test_format_reports_a_short_buffer_and_invalid_pairs);
+  RUN_TEST(test_file_copy_wins_over_nvs);
+  RUN_TEST(test_nvs_is_used_and_migrated_when_the_file_is_missing);
+  RUN_TEST(test_corrupt_file_falls_back_to_nvs_and_is_flagged);
+  RUN_TEST(test_nothing_stored_means_no_credentials);
+  RUN_TEST(test_source_names);
+  return UNITY_END();
+}

@@ -145,8 +145,8 @@ void StationApp::loop() {
   web_.loop(nowMs);
   ble_.loop(nowMs, snapshot_, currentAlerts().any());
 
-  if (qrVisible_ && static_cast<int32_t>(nowMs - qrUntilMs_) >= 0) {
-    qrVisible_ = false;
+  if (wifiQr_.visible() && static_cast<int32_t>(nowMs - qrUntilMs_) >= 0) {
+    wifiQr_.hide();
     dirty_ = true;
   }
 
@@ -372,7 +372,7 @@ void StationApp::updateView(uint32_t nowMs) {
   view_.menuSelection = controller_.menuSelection();
   view_.temperatureGraph = &temperatureGraph_;
   view_.pressureGraph = &pressureGraph_;
-  view_.qrVisible = qrVisible_;
+  view_.qrVisible = wifiQr_.visible();
   view_.qrCode = &qr_;
   view_.pet = &pet_.scene();
 }
@@ -388,7 +388,8 @@ void StationApp::redraw() {
              controller_.envView() == EnvView::kGraph) {
     buildStationGraphScreen(view_, &framebuffer_);
     drawLines = false;
-  } else if (controller_.mode() == StationMode::kWifi && qrVisible_ && qr_.valid()) {
+  } else if (controller_.mode() == StationMode::kWifi && wifiQr_.visible() &&
+             qr_.valid()) {
     framebuffer_.clear();
     drawLines = false;
     if (drawQrCode(framebuffer_, qr_, Framebuffer::kWidth, Framebuffer::kHeight) == 0) {
@@ -427,6 +428,9 @@ void StationApp::redraw() {
 void StationApp::enterMode(StationMode mode) {
   controller_.selectMode(mode);
   if (mode == StationMode::kWifi) {
+    // Every entry starts on the Wi-Fi status page, never on a code left over
+    // from the previous visit.
+    wifiQr_.enterMode();
     updateQrPayload();
   }
   // A button press that started in another screen must not be mistaken for one
@@ -449,7 +453,7 @@ void StationApp::leaveMode(StationMode mode) {
     ble_.setHidMode(false);
   }
   if (mode == StationMode::kWifi) {
-    qrVisible_ = false;
+    wifiQr_.leaveMode();
   }
   confirmPressedInLogs_ = false;
   confirmLongFired_ = false;
@@ -534,6 +538,11 @@ void StationApp::handleInputs(const InputEvent& rawEvent, uint32_t nowMs) {
         dirty_ = true;
         break;
       case StationMode::kPet:
+        // The cat notices the dial: a hop, hearts and a happy line.
+        pet_.interact(nowMs);
+        Serial.printf("input: pet happy (%s)\n", petActivityName(pet_.scene().activity));
+        dirty_ = true;
+        break;
       case StationMode::kWifi:
       case StationMode::kSystem:
         break;
@@ -559,6 +568,12 @@ void StationApp::handleModeInputs(const InputEvent& event, uint32_t nowMs) {
         controller_.openMenu();
         Serial.printf("input: BAK -> menu (selection %s)\n",
                       stationModeName(controller_.menuSelection()));
+        dirty_ = true;
+      }
+      if (push) {
+        // PSH pets the cat, just like a turn of the encoder.
+        pet_.interact(nowMs);
+        Serial.printf("input: pet happy (%s)\n", petActivityName(pet_.scene().activity));
         dirty_ = true;
       }
       if (confirm) {
@@ -625,10 +640,18 @@ void StationApp::handleModeInputs(const InputEvent& event, uint32_t nowMs) {
           Serial.printf("wifi: setup AP '%s' password %s\n", kSetupApSsid,
                         wifi_.setupApPassword());
         }
+        // The QR shows the old mode, so the status page comes back at once.
+        wifiQr_.onModeSwitch();
+        updateQrPayload();
         dirty_ = true;
       }
       if (back) {
-        controller_.back();
+        // A visible code covers the status page: the first BAK closes the code
+        // and the second one leaves for the menu.
+        if (!wifiQr_.closeOnBack()) {
+          leaveMode(StationMode::kWifi);
+          controller_.back();
+        }
         dirty_ = true;
       }
       break;
@@ -739,6 +762,9 @@ void StationApp::printWifiStatus() {
   status.epochSeconds = wifi_.epochSeconds();
   status.utcOffsetSeconds = kLocalUtcOffsetSeconds;
   status.uptimeMs = millis();
+  status.storage = wifiConfigSourceName(wifi_.configSource());
+  status.storagePath =
+      wifi_.configSource() == WifiConfigSource::kLittleFs ? wifi_.configPath() : "";
   char buffer[320];
   formatWifiStatus(status, buffer, sizeof(buffer));
   printLine(buffer);
@@ -776,10 +802,13 @@ void StationApp::printPetStatus() {
   const PetScene& pet = pet_.scene();
   Serial.printf("pet: activity=%s mood=%s clock=%s\n", petActivityName(pet.activity),
                 petMoodName(pet.mood), pet.clock);
-  Serial.printf("  speech=%s bubble=%s x=%d chime=%s last_hour=%d\n", pet.speech,
-                pet.bubbleVisible ? pet.bubbleText : "-",
-                static_cast<int>(pet.spriteX), pet_.chimeActive() ? "on" : "off",
-                pet_.lastChimeHour());
+  Serial.printf(
+      "  speech=%s bubble=%s x=%d hop=%u icons=%s reactions=%u chime=%s last_hour=%d\n",
+      pet.speech, pet.bubbleVisible ? pet.bubbleText : "-",
+      static_cast<int>(pet.spriteX), static_cast<unsigned>(pet.hop),
+      (pet.heartVisible || pet.noteVisible || pet.starVisible) ? "on" : "off",
+      static_cast<unsigned>(pet_.reactionCount()),
+      pet_.chimeActive() ? "on" : "off", pet_.lastChimeHour());
   Serial.printf("  clock chime in 20s of every hour, 8s long; 'pet clock' replays it\n");
 }
 
@@ -810,7 +839,7 @@ void StationApp::showQr() {
   // Switch first: leaving a mode hides the QR, so setting the flag before the
   // switch would immediately clear it again.
   switchMode(StationMode::kWifi);
-  qrVisible_ = true;
+  wifiQr_.show();
   qrUntilMs_ = millis() + kQrDisplayDurationMs;
   dirty_ = true;
   Serial.printf("qr: %s\n", qrPayload_);
@@ -914,6 +943,7 @@ size_t StationApp::buildStatusJson(char* out, size_t outSize) {
   std::snprintf(state.ip, sizeof(state.ip), "%s", view_.ip);
   state.rssi = view_.rssi;
   state.ntpSynced = view_.ntpSynced;
+  state.wifiStorage = wifiConfigSourceName(wifi_.configSource());
   const int64_t epoch = wifi_.epochSeconds();
   if (epoch > 0) {
     formatTimestamp(epoch, kLocalUtcOffsetSeconds, state.timestamp,
@@ -1031,8 +1061,11 @@ bool StationApp::handleCommand(const Command& command) {
       dirty_ = true;
       return true;
     case CommandType::kWifiClear:
-      wifi_.clearCredentials();
-      Serial.println("wifi: credentials cleared, setup AP started");
+      if (wifi_.clearCredentials()) {
+        Serial.println("wifi: credentials cleared, setup AP started");
+      } else {
+        Serial.println("wifi: could not clear the stored network, keeping it");
+      }
       dirty_ = true;
       return true;
     case CommandType::kBleStatus:
@@ -1092,21 +1125,28 @@ bool StationApp::handleCommand(const Command& command) {
       switchMode(StationMode::kPet);
       testClockChime();
       return true;
-    case CommandType::kModeSelect:
-      if (!controller_.selectModeByName(command.mode)) {
-        Serial.printf("error: unknown mode '%s'\n", command.mode);
+    case CommandType::kModeSelect: {
+      // A mode goes through switchMode so the mode being left is really left:
+      // the BLE remote turns off and a visible Wi-Fi QR closes. Jumping with
+      // selectModeByName alone was what let the QR survive a `mode` change.
+      StationMode target = StationMode::kEnvironment;
+      if (stationModeFromName(command.mode, &target)) {
+        switchMode(target);
+        announceMode();
+        dirty_ = true;
         return true;
       }
-      if (controller_.screen() == StationScreen::kMenu) {
+      if (controller_.selectModeByName(command.mode)) {
+        // "menu" / "home" is a screen, not a mode.
         leaveMode(controller_.mode());
-      } else if (controller_.mode() != StationMode::kBle && ble_.hidMode()) {
-        ble_.setHidMode(false);
+        controller_.selectModeByName(command.mode);
+        announceMode();
+        dirty_ = true;
+        return true;
       }
-      confirmPressedInLogs_ = false;
-      confirmLongFired_ = false;
-      announceMode();
-      dirty_ = true;
+      Serial.printf("error: unknown mode '%s'\n", command.mode);
       return true;
+    }
     default:
       break;
   }

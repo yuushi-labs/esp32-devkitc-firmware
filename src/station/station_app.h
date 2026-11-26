@@ -125,7 +125,8 @@ class StationApp : public WebDashboardHost {
   bool dirty_ = true;
   bool confirmLongFired_ = false;
   bool confirmPressedInLogs_ = false;
-  bool qrVisible_ = false;
+  // QR overlay on the Wi-Fi page: BAK closes it before leaving the mode.
+  WifiQrState wifiQr_;
   // Last frame actually sent to the panel, so identical frames cost no I2C time.
   uint32_t lastFrameHash_ = 0;
   bool frameSent_ = false;

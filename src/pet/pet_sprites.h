@@ -116,4 +116,43 @@ struct PetSprite {
       },
   };
 
+  // kIconHeart: 5x5, floating above a happy cat.
+  //           # #  
+  //          ##### 
+  //          ##### 
+  //           ###  
+  //            #   
+  constexpr PetSprite kIconHeart{
+      5, 5,
+      {
+          0x0Au, 0x1Fu, 0x1Fu, 0x0Eu, 0x04u,
+      },
+  };
+
+  // kIconNote: 5x5, a music note for the reaction to a pat.
+  //            ###
+  //            #  
+  //            #  
+  //          # #  
+  //          ###  
+  constexpr PetSprite kIconNote{
+      5, 5,
+      {
+          0x18u, 0x08u, 0x08u, 0x0Au, 0x07u,
+      },
+  };
+
+  // kIconSparkle: 5x5, a four point sparkle.
+  //            #   
+  //            #   
+  //          ##### 
+  //            #   
+  //            #   
+  constexpr PetSprite kIconSparkle{
+      5, 5,
+      {
+          0x04u, 0x04u, 0x1Fu, 0x04u, 0x04u,
+      },
+  };
+
 }  // namespace fw
