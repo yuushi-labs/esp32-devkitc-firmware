@@ -5,6 +5,7 @@
 
 #include "graphics/qr_code.h"
 #include "graphics/qr_render.h"
+#include "net/wifi_qr.h"
 
 void setUp() {}
 void tearDown() {}
@@ -208,6 +209,74 @@ void test_renderer_scales_the_code_for_a_station_url() {
   TEST_ASSERT_TRUE(dark < static_cast<size_t>(Framebuffer::kWidth * Framebuffer::kHeight));
 }
 
+void test_wifi_qr_field_escapes_the_separators() {
+  char out[64];
+  TEST_ASSERT_EQUAL_UINT32(4, escapeWifiQrField("home", out, sizeof(out)));
+  TEST_ASSERT_EQUAL_STRING("home", out);
+
+  TEST_ASSERT_EQUAL_UINT32(4, escapeWifiQrField("a;b", out, sizeof(out)));
+  TEST_ASSERT_EQUAL_STRING("a\\;b", out);
+  TEST_ASSERT_EQUAL_UINT32(4, escapeWifiQrField("a,b", out, sizeof(out)));
+  TEST_ASSERT_EQUAL_STRING("a\\,b", out);
+  TEST_ASSERT_EQUAL_UINT32(4, escapeWifiQrField("a:b", out, sizeof(out)));
+  TEST_ASSERT_EQUAL_STRING("a\\:b", out);
+  TEST_ASSERT_EQUAL_UINT32(4, escapeWifiQrField("a\"b", out, sizeof(out)));
+  TEST_ASSERT_EQUAL_STRING("a\\\"b", out);
+  TEST_ASSERT_EQUAL_UINT32(4, escapeWifiQrField("a\\b", out, sizeof(out)));
+  TEST_ASSERT_EQUAL_STRING("a\\\\b", out);
+
+  // A truncated buffer still reports the length the full field needs.
+  char small[4];
+  TEST_ASSERT_EQUAL_UINT32(4, escapeWifiQrField("a;b", small, sizeof(small)));
+  TEST_ASSERT_EQUAL_STRING("a\\;", small);
+  TEST_ASSERT_EQUAL_UINT32(0, escapeWifiQrField(nullptr, out, sizeof(out)));
+}
+
+void test_wifi_qr_payload_for_the_setup_ap() {
+  char out[128];
+  const size_t length =
+      formatWifiQrPayload("ESP32-Station-AP", "Ab3dEf9h", out, sizeof(out));
+  TEST_ASSERT_EQUAL_STRING("WIFI:T:WPA;S:ESP32-Station-AP;P:Ab3dEf9h;;", out);
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(std::strlen(out)),
+                        static_cast<int>(length));
+  TEST_ASSERT_TRUE(isWifiQrPayload(out));
+  TEST_ASSERT_FALSE(isWifiQrPayload("http://192.168.4.1/"));
+
+  // An open network drops the password field and says so in the type.
+  const size_t openLength = formatWifiQrPayload("Cafe", "", out, sizeof(out));
+  TEST_ASSERT_EQUAL_STRING("WIFI:T:nopass;S:Cafe;;", out);
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(std::strlen(out)),
+                        static_cast<int>(openLength));
+  // Escaping also applies inside the payload.
+  formatWifiQrPayload("Cafe;2", "pass;word", out, sizeof(out));
+  TEST_ASSERT_EQUAL_STRING("WIFI:T:WPA;S:Cafe\\;2;P:pass\\;word;;", out);
+}
+
+void test_setup_ap_qr_fits_and_scales_for_the_panel() {
+  char payload[96];
+  formatWifiQrPayload("ESP32-Station-AP", "Ab3dEf9h", payload, sizeof(payload));
+  // 42 characters need version 3 at ECC level L (53 byte capacity).
+  TEST_ASSERT_EQUAL_INT(42, static_cast<int>(std::strlen(payload)));
+
+  QrCode qr;
+  TEST_ASSERT_TRUE(qr.encode(payload));
+  TEST_ASSERT_EQUAL_INT(3, qr.version());
+  TEST_ASSERT_EQUAL_INT(29, qr.size());
+
+  Framebuffer framebuffer;
+  const int scale = drawQrCode(framebuffer, qr, Framebuffer::kWidth, Framebuffer::kHeight);
+  // 29 modules at two pixels per module is 58 px, inside the 64 px panel.
+  TEST_ASSERT_EQUAL_INT(2, scale);
+  TEST_ASSERT_EQUAL_INT(58, qr.size() * scale);
+  // Still a lit border around the code on all four sides.
+  const int originX = (Framebuffer::kWidth - qr.size() * scale) / 2;
+  const int originY = (Framebuffer::kHeight - qr.size() * scale) / 2;
+  TEST_ASSERT_EQUAL_INT(35, originX);
+  TEST_ASSERT_EQUAL_INT(3, originY);
+  TEST_ASSERT_TRUE(framebuffer.pixel(originX - 1, originY - 1));
+  TEST_ASSERT_TRUE(framebuffer.pixel(originX + qr.size() * scale, originY));
+}
+
 void test_renderer_rejects_codes_it_cannot_scale() {
   QrCode qr;
   Framebuffer framebuffer;
@@ -236,6 +305,9 @@ int main(int argc, char** argv) {
   RUN_TEST(test_encoding_clears_previous_state);
   RUN_TEST(test_mask_zero_matrix_matches_the_reference);
   RUN_TEST(test_renderer_scales_the_code_for_a_station_url);
+  RUN_TEST(test_wifi_qr_field_escapes_the_separators);
+  RUN_TEST(test_wifi_qr_payload_for_the_setup_ap);
+  RUN_TEST(test_setup_ap_qr_fits_and_scales_for_the_panel);
   RUN_TEST(test_renderer_rejects_codes_it_cannot_scale);
   return UNITY_END();
 }

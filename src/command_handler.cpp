@@ -170,7 +170,7 @@ Command parseCommand(const char* line) {
   } else if (equalsIgnoreCase(verbText, "page") && extra == nullptr) {
     if (arg == nullptr) {
       command.type = CommandType::kPageNext;
-    } else if (arg[1] == '\0' && arg[0] >= '1' && arg[0] <= '6') {
+    } else if (arg[1] == '\0' && arg[0] >= '1' && arg[0] <= '7') {
       command.type = CommandType::kPageSelect;
       command.page = static_cast<uint8_t>(arg[0] - '0');
     } else {
@@ -233,6 +233,24 @@ Command parseCommand(const char* line) {
     } else {
       command.type = CommandType::kUnknown;
     }
+  } else if (equalsIgnoreCase(verbText, "oled") && extra == nullptr) {
+    if (arg == nullptr || equalsIgnoreCase(arg, "status")) {
+      command.type = CommandType::kOledStatus;
+    } else if (equalsIgnoreCase(arg, "on")) {
+      command.type = CommandType::kOledOn;
+    } else if (equalsIgnoreCase(arg, "off")) {
+      command.type = CommandType::kOledOff;
+    } else {
+      command.type = CommandType::kUnknown;
+    }
+  } else if (equalsIgnoreCase(verbText, "pet") && extra == nullptr) {
+    if (arg == nullptr || equalsIgnoreCase(arg, "status")) {
+      command.type = CommandType::kPetStatus;
+    } else if (equalsIgnoreCase(arg, "clock")) {
+      command.type = CommandType::kPetClock;
+    } else {
+      command.type = CommandType::kUnknown;
+    }
   } else if (equalsIgnoreCase(verbText, "led") && arg != nullptr && extra == nullptr) {
     command.hasLedMode = true;
     if (equalsIgnoreCase(arg, "on")) {
@@ -285,9 +303,13 @@ const char* commandHelpText(FirmwareTarget target) {
          "  log now    write one sample immediately\n"
          "  log clear  delete /log.csv and start over\n"
          "  page       go to the next mode\n"
-         "  page 1..6  jump to a mode\n"
+         "  page 1..7  jump to a mode\n"
          "  mode       show the current screen and mode\n"
-         "  mode NAME  open env/logs/wifi/ble/timer/system/menu\n"
+         "  mode NAME  open pet/env/logs/wifi/ble/timer/system/menu\n"
+         "  oled       show the OLED power state\n"
+         "  oled on|off  turn the panel on or off\n"
+         "  pet        show the virtual pet state\n"
+         "  pet clock  replay the hourly clock chime\n"
          "  wifi       show the Wi-Fi and NTP status\n"
          "  wifi ap    start the setup access point\n"
          "  wifi station  reconnect to the saved network\n"

@@ -67,6 +67,7 @@ bool Ssd1306Display::begin() {
     return false;
   }
   initialised_ = true;
+  power_ = true;
   return true;
 }
 
@@ -82,9 +83,25 @@ bool Ssd1306Display::present() {
   return begin();
 }
 
+bool Ssd1306Display::setPower(bool on) {
+  if (!initialised_) {
+    return false;
+  }
+  const uint8_t command = on ? kCommandDisplayOn : kCommandDisplayOff;
+  if (!sendCommands(&command, 1)) {
+    return false;
+  }
+  power_ = on;
+  return true;
+}
+
 bool Ssd1306Display::flush() {
   if (!initialised_) {
     return false;
+  }
+  if (!power_) {
+    // The panel is dark on purpose; keep the bus free for the sensors.
+    return true;
   }
 
   const uint8_t* pages = framebuffer_.buffer();

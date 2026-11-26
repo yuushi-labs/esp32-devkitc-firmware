@@ -5,13 +5,13 @@
 namespace fw {
 namespace {
 
-// ISO/IEC 18004 asks for a four module quiet zone around the symbol. A 128x64
-// panel cannot hold a version 2 code with that border at two pixels per module,
-// so the lit background of the panel provides it: the renderer keeps at least
-// two modules free on every side instead of dropping to one pixel per module,
-// which no phone camera can resolve.
-constexpr int kQuietZoneModules = 4;
-constexpr int kMinimumMarginModules = 2;
+// ISO/IEC 18004 asks for a four module quiet zone around the symbol, but a
+// 128x64 panel cannot hold a large code with that border at two pixels per
+// module. The renderer lights the whole panel, so the lit area around the
+// symbol is the quiet zone; what it must keep is a small light border so the
+// code does not touch the bezel.
+constexpr int kMinimumMarginPixels = 2;
+constexpr int kMaxScale = 8;
 
 }  // namespace
 
@@ -22,25 +22,30 @@ int drawQrCode(Framebuffer& framebuffer, const QrCode& qr, int maxWidth,
   }
 
   const int shortSide = std::min(maxWidth, maxHeight);
-  int scale = shortSide / (qr.size() + 2 * kQuietZoneModules);
-  if (scale < 2) {
-    scale = std::max(scale, shortSide / (qr.size() + 2 * kMinimumMarginModules));
+  // Largest whole-pixel scale that still leaves the light border. The margin is
+  // measured in pixels, not modules: at scale 2 a four module quiet zone would
+  // cost 16 of the 64 rows and leave a large code at one pixel per module,
+  // which no phone camera resolves.
+  int scale = 0;
+  for (int candidate = kMaxScale; candidate >= 1; --candidate) {
+    const int extent = qr.size() * candidate;
+    if (extent > maxWidth || extent > maxHeight ||
+        extent + 2 * kMinimumMarginPixels > shortSide) {
+      continue;
+    }
+    scale = candidate;
+    break;
   }
-  if (scale < 1) {
+  if (scale == 0) {
     return 0;
   }
 
   const int extent = qr.size() * scale;
-  if (extent > maxWidth || extent > maxHeight) {
-    return 0;
-  }
-
+  const int originX = (maxWidth - extent) / 2;
+  const int originY = (maxHeight - extent) / 2;
   // A scanner expects dark modules on a light background: light the whole area
   // and punch the dark modules out of it.
   framebuffer.fillRect(0, 0, maxWidth, maxHeight, true);
-
-  const int originX = (maxWidth - extent) / 2;
-  const int originY = (maxHeight - extent) / 2;
   for (int y = 0; y < qr.size(); ++y) {
     for (int x = 0; x < qr.size(); ++x) {
       if (qr.module(x, y)) {

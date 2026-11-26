@@ -277,6 +277,9 @@ canvas{width:100%;height:auto;display:block;border-radius:8px;background:#0b0f14
 .actions{display:flex;flex-wrap:wrap;gap:10px;margin-top:14px}
 .btn{appearance:none;border:1px solid var(--line);background:#21262d;color:var(--text);border-radius:10px;padding:9px 14px;font:inherit;text-decoration:none;cursor:pointer}
 .btn:hover{border-color:var(--accent);color:var(--accent)}
+.btn.active{border-color:var(--accent);color:var(--accent);background:#1f2937}
+.modes{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
+.modes .btn{padding:8px 12px}
 .muted{color:var(--muted);font-size:12px}
 footer{max-width:860px;margin:0 auto;padding:8px 20px 28px;color:var(--muted);font-size:12px}
 </style></head>
@@ -290,6 +293,28 @@ footer{max-width:860px;margin:0 auto;padding:8px 20px 28px;color:var(--muted);fo
 <div class="card"><span class="label">Comfort</span><span class="value"><b id="comfort" style="font-size:22px">--</b></span></div>
 </section>
 <div id="alert" class="alert hidden"></div>
+<section class="panel"><div class="panel-head"><h2>OLED remote</h2><span id="oled-state" class="muted">--</span></div>
+<div class="actions">
+<button class="btn" id="oled-power" onclick="oledPost({power:'toggle'})">Screen off</button>
+<button class="btn" onclick="oledPost({action:'back'})">Back</button>
+<button class="btn" onclick="oledPost({action:'prev'})">&#9664; Prev</button>
+<button class="btn" onclick="oledPost({action:'next'})">Next &#9654;</button>
+<button class="btn" onclick="oledPost({action:'select'})">Select</button>
+<button class="btn" onclick="oledPost({action:'clock'})">Clock chime</button>
+</div>
+<div class="modes" id="oled-modes">
+<button class="btn" data-mode="pet" onclick="oledPost({mode:'pet'})">Pet</button>
+<button class="btn" data-mode="env" data-view="summary" onclick="oledPost({mode:'env',view:'summary'})">Monitor</button>
+<button class="btn" data-mode="env" data-view="graph" onclick="oledPost({mode:'env',view:'graph'})">Graph</button>
+<button class="btn" data-mode="env" data-view="detail" onclick="oledPost({mode:'env',view:'detail'})">Detail</button>
+<button class="btn" data-mode="logs" onclick="oledPost({mode:'logs'})">Logs</button>
+<button class="btn" data-mode="wifi" onclick="oledPost({mode:'wifi'})">Wi-Fi</button>
+<button class="btn" data-mode="ble" onclick="oledPost({mode:'ble'})">BLE</button>
+<button class="btn" data-mode="timer" onclick="oledPost({mode:'timer'})">Timer</button>
+<button class="btn" data-mode="system" onclick="oledPost({mode:'system'})">System</button>
+<button class="btn" data-mode="menu" onclick="oledPost({mode:'menu'})">Menu</button>
+</div>
+<p class="muted">The panel wakes on its own when a button on the device is pressed.</p></section>
 <section class="panel"><div class="panel-head"><h2>History</h2><span id="range" class="muted"></span></div>
 <canvas id="chart" width="640" height="220"></canvas></section>
 <section class="panel"><div class="panel-head"><h2>Device</h2><span id="updated" class="muted"></span></div>
@@ -359,9 +384,30 @@ function draw(){
  if(vals.length){g.fillStyle='#56d4dd';g.fillText('Temp '+Math.min(...vals).toFixed(1)+'–'+Math.max(...vals).toFixed(1)+' °C',pad,16)}
  if(pres.length){g.fillStyle='#f0a44b';g.textAlign='right';g.fillText('Pressure '+Math.min(...pres).toFixed(0)+'–'+Math.max(...pres).toFixed(0)+' hPa',W-pad,16);g.textAlign='left'}
 }
+function renderOled(s){
+ $('oled-state').textContent=(s.power?'screen on':'screen off')+' \u00b7 '+
+  (s.screen==='menu'?'menu':s.mode+(s.view!=='summary'?' '+s.view:''));
+ $('oled-power').textContent=s.power?'Screen off':'Screen on';
+ document.querySelectorAll('#oled-modes .btn').forEach(function(b){
+  const m=b.dataset.mode,v=b.dataset.view;
+  const active=(m==='menu')?(s.screen==='menu'):(s.screen==='mode'&&m===s.mode&&(!v||v===s.view));
+  b.classList.toggle('active',active);
+ });
+}
+async function oledPost(fields){
+ try{
+  const r=await fetch('/api/oled',{method:'POST',
+   headers:{'Content-Type':'application/x-www-form-urlencoded'},
+   body:new URLSearchParams(fields)});
+  renderOled(await r.json());
+ }catch(e){}
+}
+async function oledTick(){
+ try{const r=await fetch('/api/oled',{cache:'no-store'});renderOled(await r.json())}catch(e){}
+}
 function clearLog(){if(confirm('Delete /log.csv and start over?'))fetch('/api/log/clear',{method:'POST'}).then(logs)}
 function showQr(){fetch('/api/qr',{method:'POST'})}
-tick();logs();setInterval(tick,2000);setInterval(logs,30000);
+tick();logs();oledTick();setInterval(tick,2000);setInterval(logs,30000);setInterval(oledTick,2000);
 </script>
 </body></html>)HTML";
 }

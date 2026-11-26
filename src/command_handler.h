@@ -59,6 +59,12 @@ enum class CommandType {
   kTimerReset,
   kModeStatus,
   kModeSelect,
+  // Station v0.4.0: the OLED panel and the virtual pet.
+  kOledStatus,
+  kOledOn,
+  kOledOff,
+  kPetStatus,
+  kPetClock,
   kUnknown,
 };
 
