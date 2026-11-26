@@ -30,7 +30,9 @@ class WifiManager {
 
   bool loadCredentials(WifiCredentials* out) const;
   bool saveCredentials(const WifiCredentials& credentials);
-  void clearCredentials();
+  // Clears both stores; false when one of them could not be cleared (the
+  // station then keeps running instead of pretending the network is gone).
+  bool clearCredentials();
   bool hasStoredCredentials() const { return credentials_.valid; }
 
   // Where the saved network is kept and whether the file system is mounted.
@@ -68,9 +70,10 @@ class WifiManager {
   // Reads /wifi.json first and falls back to NVS, without writing anything.
   bool loadStored(WifiCredentials* out, WifiConfigSource* source,
                   bool* migrate) const;
+  bool readFileInto(const char* path, char* out, size_t outSize) const;
   bool readConfigFile(char* out, size_t outSize) const;
   bool writeConfigFile(const char* text);
-  void restoreConfigFile(const char* previous, bool hadFile);
+  bool restoreConfigFile(const char* previous, bool hadFile);
   bool readNvsConfig(char* ssid, size_t ssidSize, char* password,
                      size_t passwordSize) const;
   bool writeNvsConfig(const WifiCredentials& credentials);

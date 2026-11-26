@@ -1061,8 +1061,11 @@ bool StationApp::handleCommand(const Command& command) {
       dirty_ = true;
       return true;
     case CommandType::kWifiClear:
-      wifi_.clearCredentials();
-      Serial.println("wifi: credentials cleared, setup AP started");
+      if (wifi_.clearCredentials()) {
+        Serial.println("wifi: credentials cleared, setup AP started");
+      } else {
+        Serial.println("wifi: could not clear the stored network, keeping it");
+      }
       dirty_ = true;
       return true;
     case CommandType::kBleStatus:

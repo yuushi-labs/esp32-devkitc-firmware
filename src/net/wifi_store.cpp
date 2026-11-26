@@ -142,8 +142,10 @@ class Parser {
         }
         return true;
       }
-      char decoded = '\0';
+      unsigned codePoint = 0;
+      bool escapedCharacter = false;
       if (c == '\\') {
+        escapedCharacter = true;
         ++cursor_;
         const char escape = *cursor_;
         if (escape == '\0') {
@@ -152,37 +154,37 @@ class Parser {
         ++cursor_;
         switch (escape) {
           case '"':
-            decoded = '"';
+            codePoint = '"';
             break;
           case '\\':
-            decoded = '\\';
+            codePoint = '\\';
             break;
           case '/':
-            decoded = '/';
+            codePoint = '/';
             break;
           case 'b':
-            decoded = '\b';
+            codePoint = '\b';
             break;
           case 'f':
-            decoded = '\f';
+            codePoint = '\f';
             break;
           case 'n':
-            decoded = '\n';
+            codePoint = '\n';
             break;
           case 'r':
-            decoded = '\r';
+            codePoint = '\r';
             break;
           case 't':
-            decoded = '\t';
+            codePoint = '\t';
             break;
           case 'u': {
-            int value = 0;
+            unsigned value = 0;
             for (int index = 0; index < 4; ++index) {
               const int digit = hexDigit(*cursor_);
               if (digit < 0) {
                 return false;
               }
-              value = value * 16 + digit;
+              value = value * 16u + static_cast<unsigned>(digit);
               ++cursor_;
             }
             if (value == 0) {
@@ -191,13 +193,12 @@ class Parser {
               }
               return false;
             }
-            if (value > 0xFF) {
-              // The writer only emits \u00XX for control characters; anything
-              // wider would need a code point conversion this parser does not
-              // do, so reject it rather than store a mangled name.
+            if (value >= 0xD800u && value <= 0xDFFFu) {
+              // Surrogate halves cannot be stored as a UTF-8 character on
+              // their own; a real pair would have to be combined first.
               return false;
             }
-            decoded = static_cast<char>(value);
+            codePoint = value;
             break;
           }
           default:
@@ -206,26 +207,41 @@ class Parser {
       } else if (c < 0x20) {
         return false;
       } else {
-        decoded = static_cast<char>(c);
+        codePoint = c;
         ++cursor_;
       }
-      if (decoded == '\0') {
-        if (error != nullptr) {
-          *error = WifiValidation::kEmbeddedNul;
-        }
-        return false;
-      }
-      if (out != nullptr && written + 1 < outSize) {
-        out[written] = decoded;
+      // The file itself holds UTF-8, so a \uXXXX code point is written back as
+      // the same UTF-8 bytes the setup form typed instead of one raw byte.
+      char encoded[3] = {0, 0, 0};
+      size_t encodedLength = 0;
+      if (!escapedCharacter) {
+        // Bytes >= 0x80 are already UTF-8 in the file; copy them unchanged so
+        // a Japanese SSID is not encoded twice.
+        encoded[encodedLength++] = static_cast<char>(c);
+      } else if (codePoint < 0x80u) {
+        encoded[encodedLength++] = static_cast<char>(codePoint);
+      } else if (codePoint < 0x800u) {
+        encoded[encodedLength++] = static_cast<char>(0xC0u | (codePoint >> 6));
+        encoded[encodedLength++] = static_cast<char>(0x80u | (codePoint & 0x3Fu));
       } else {
-        // A shortened name or password must never be saved as if it were the
-        // value the user typed.
-        if (error != nullptr) {
-          *error = overflowError;
-        }
-        return false;
+        encoded[encodedLength++] = static_cast<char>(0xE0u | (codePoint >> 12));
+        encoded[encodedLength++] =
+            static_cast<char>(0x80u | ((codePoint >> 6) & 0x3Fu));
+        encoded[encodedLength++] = static_cast<char>(0x80u | (codePoint & 0x3Fu));
       }
-      ++written;
+      for (size_t index = 0; index < encodedLength; ++index) {
+        if (out != nullptr && written + 1 < outSize) {
+          out[written] = encoded[index];
+        } else {
+          // A shortened name or password must never be saved as if it were the
+          // value the user typed.
+          if (error != nullptr) {
+            *error = overflowError;
+          }
+          return false;
+        }
+        ++written;
+      }
     }
     return false;
   }
@@ -299,7 +315,12 @@ class Parser {
     }
     uint32_t result = 0;
     while (*cursor_ >= '0' && *cursor_ <= '9') {
-      result = result * 10 + static_cast<uint32_t>(*cursor_ - '0');
+      const uint32_t digit = static_cast<uint32_t>(*cursor_ - '0');
+      if (result > (0xFFFFFFFFu - digit) / 10u) {
+        // 4294967297 must not wrap around to 1 and be accepted as version 1.
+        return false;
+      }
+      result = result * 10u + digit;
       ++cursor_;
     }
     if (value != nullptr) {
@@ -316,6 +337,7 @@ class Parser {
       return skipString();
     }
     if (*cursor_ == '{' || *cursor_ == '[') {
+      const char close = *cursor_ == '{' ? '}' : ']';
       int depth = 0;
       while (*cursor_ != '\0') {
         if (*cursor_ == '"') {
@@ -326,23 +348,33 @@ class Parser {
         }
         if (*cursor_ == '{' || *cursor_ == '[') {
           ++depth;
-        } else if (*cursor_ == '}' || *cursor_ == ']') {
+          ++cursor_;
+          continue;
+        }
+        if (*cursor_ == '}' || *cursor_ == ']') {
           --depth;
           if (depth == 0) {
+            if (*cursor_ != close) {
+              return false;
+            }
             ++cursor_;
             return true;
           }
+          ++cursor_;
+          continue;
         }
         ++cursor_;
       }
       return false;
     }
-    // Number, true, false or null.
+    // Number, true, false or null: at least one character that is not a
+    // separator, so `"extra":}` cannot be accepted as an empty value.
+    const char* start = cursor_;
     while (*cursor_ != '\0' && !isSpace(*cursor_) && *cursor_ != ',' &&
-           *cursor_ != '}') {
+           *cursor_ != '}' && *cursor_ != ']') {
       ++cursor_;
     }
-    return true;
+    return cursor_ != start;
   }
 
  private:

@@ -115,6 +115,36 @@ void test_config_json_rejects_broken_files() {
                         static_cast<int>(error));
 }
 
+void test_unicode_escapes_become_utf8() {
+  WifiCredentials parsed;
+  // "Caf\u00E9" has to become the same UTF-8 bytes a form would type, so the
+  // station joins the network whose name it shows.
+  TEST_ASSERT_TRUE(parseWifiConfigJson(
+      "{\"ssid\":\"Caf\\u00E9\",\"password\":\"12345678\"}", &parsed));
+  TEST_ASSERT_EQUAL_STRING("Caf\xC3\xA9", parsed.ssid);
+  TEST_ASSERT_EQUAL_UINT32(5, static_cast<uint32_t>(std::strlen(parsed.ssid)));
+
+  // A three byte code point (\u5BB6, "house") too.
+  TEST_ASSERT_TRUE(parseWifiConfigJson(
+      "{\"ssid\":\"\\u5BB6\",\"password\":\"12345678\"}", &parsed));
+  TEST_ASSERT_EQUAL_STRING("\xE5\xAE\xB6", parsed.ssid);
+}
+
+void test_config_json_rejects_overflowed_versions_and_empty_values() {
+  WifiCredentials parsed;
+  // 4294967297 must not wrap to 1 and pass as version 1.
+  TEST_ASSERT_FALSE(parseWifiConfigJson(
+      "{\"version\":4294967297,\"ssid\":\"Home\",\"password\":\"12345678\"}",
+      &parsed));
+  // A key without a value is not valid JSON, even when the key is unknown.
+  TEST_ASSERT_FALSE(parseWifiConfigJson(
+      "{\"ssid\":\"Home\",\"password\":\"12345678\",\"extra\":}", &parsed));
+  // Mismatched brackets in an unknown value are broken JSON too.
+  TEST_ASSERT_FALSE(parseWifiConfigJson(
+      "{\"ssid\":\"Home\",\"password\":\"12345678\",\"extra\":[1,2}}",
+      &parsed));
+}
+
 void test_config_json_rejects_a_value_that_does_not_fit() {
   // 33 characters: the file holds a name the SSID field cannot take.
   std::string text = "{\"ssid\":\"";
@@ -141,10 +171,20 @@ void test_format_reports_a_short_buffer_and_invalid_pairs() {
                                   formatWifiConfigJson(invalid, json, sizeof(json))));
   TEST_ASSERT_EQUAL_STRING("", json);
 
-  // The worst case pair still fits the file buffer the manager uses.
-  const WifiCredentials worst = pair("SSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSS",
-                                     "PPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPP");
-  TEST_ASSERT_TRUE(formatWifiConfigJson(worst, json, sizeof(json)) < sizeof(json));
+  // The worst case pair (every byte escaped as \u00XX) still fits the file
+  // buffer the manager uses.
+  const std::string controlSsid(32, '\x01');
+  const std::string controlPassword(63, '\x01');
+  const WifiCredentials worst = pair(controlSsid.c_str(), controlPassword.c_str());
+  const size_t worstLength = formatWifiConfigJson(worst, json, sizeof(json));
+  TEST_ASSERT_TRUE(worstLength > 0);
+  TEST_ASSERT_TRUE(worstLength < sizeof(json));
+  TEST_ASSERT_NOT_NULL(std::strstr(json, "\\u0001"));
+
+  WifiCredentials worstParsed;
+  TEST_ASSERT_TRUE(parseWifiConfigJson(json, &worstParsed));
+  TEST_ASSERT_EQUAL_STRING(controlSsid.c_str(), worstParsed.ssid);
+  TEST_ASSERT_EQUAL_STRING(controlPassword.c_str(), worstParsed.password);
 }
 
 void test_file_copy_wins_over_nvs() {
@@ -225,6 +265,8 @@ int main(int argc, char** argv) {
   RUN_TEST(test_config_json_keeps_utf8_network_names);
   RUN_TEST(test_config_json_accepts_any_key_order_and_unknown_keys);
   RUN_TEST(test_config_json_rejects_broken_files);
+  RUN_TEST(test_unicode_escapes_become_utf8);
+  RUN_TEST(test_config_json_rejects_overflowed_versions_and_empty_values);
   RUN_TEST(test_config_json_rejects_a_value_that_does_not_fit);
   RUN_TEST(test_format_reports_a_short_buffer_and_invalid_pairs);
   RUN_TEST(test_file_copy_wins_over_nvs);

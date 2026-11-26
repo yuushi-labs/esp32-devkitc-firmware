@@ -118,6 +118,37 @@ bool WifiManager::loadCredentials(WifiCredentials* out) const {
   return loadStored(out, nullptr, nullptr);
 }
 
+bool WifiManager::readFileInto(const char* path, char* out, size_t outSize) const {
+  if (path == nullptr || out == nullptr || outSize == 0) {
+    return false;
+  }
+  out[0] = '\0';
+  File file = LittleFS.open(path, FILE_READ);
+  if (!file) {
+    return false;
+  }
+  const size_t size = file.size();
+  // A file larger than the buffer is rejected instead of accepted by prefix:
+  // the rest could hold anything, and a truncated pair is not the saved pair.
+  if (size == 0 || size >= outSize) {
+    file.close();
+    return false;
+  }
+  const size_t read = file.readBytes(out, size);
+  file.close();
+  if (read != size) {
+    out[0] = '\0';
+    return false;
+  }
+  out[size] = '\0';
+  if (std::strlen(out) != size) {
+    // An embedded NUL would make the parser stop in the middle of the file.
+    out[0] = '\0';
+    return false;
+  }
+  return true;
+}
+
 bool WifiManager::readConfigFile(char* out, size_t outSize) const {
   if (out == nullptr || outSize == 0) {
     return false;
@@ -126,14 +157,24 @@ bool WifiManager::readConfigFile(char* out, size_t outSize) const {
   if (!ensureFileSystem(false)) {
     return false;
   }
-  File file = LittleFS.open(kWifiConfigPath, FILE_READ);
-  if (!file) {
+  if (readFileInto(kWifiConfigPath, out, outSize)) {
+    return true;
+  }
+  // A reset between writing /wifi.json.tmp and renaming it leaves a complete
+  // new pair behind. Adopt it when it parses instead of falling back to NVS.
+  char staged[kWifiConfigMaxBytes] = {0};
+  if (!readFileInto(kWifiConfigTempPath, staged, sizeof(staged))) {
     return false;
   }
-  const size_t read = file.readBytes(out, outSize - 1);
-  file.close();
-  out[read] = '\0';
-  return read > 0;
+  WifiCredentials check;
+  if (!parseWifiConfigJson(staged, &check)) {
+    return false;
+  }
+  if (!LittleFS.exists(kWifiConfigPath)) {
+    LittleFS.rename(kWifiConfigTempPath, kWifiConfigPath);
+  }
+  copyString(out, outSize, staged);
+  return true;
 }
 
 bool WifiManager::writeConfigFile(const char* text) {
@@ -143,41 +184,49 @@ bool WifiManager::writeConfigFile(const char* text) {
   if (!ensureFileSystem(true)) {
     return false;
   }
-  // Write a temporary file first: a reset in the middle of a save leaves the
-  // previous /wifi.json untouched instead of a half written one.
+  // Write a temporary file first: the pair is complete on flash before the old
+  // /wifi.json is replaced.
   File file = LittleFS.open(kWifiConfigTempPath, FILE_WRITE);
   if (!file) {
     littlefsReady_ = false;
     return false;
   }
   const size_t written = file.print(text);
+  const bool writeFailed = file.getWriteError();
   file.close();
-  if (written != std::strlen(text)) {
+  if (writeFailed || written != std::strlen(text)) {
     LittleFS.remove(kWifiConfigTempPath);
     return false;
   }
-  // LittleFS refuses to rename onto an existing name, so the old file goes
-  // after the new one is complete on flash.
-  if (LittleFS.exists(kWifiConfigPath)) {
-    LittleFS.remove(kWifiConfigPath);
-  }
   if (!LittleFS.rename(kWifiConfigTempPath, kWifiConfigPath)) {
-    LittleFS.remove(kWifiConfigTempPath);
+    // Filesystems that refuse to rename over an existing name fall back to
+    // deleting the old file, but only now that the new one is complete.
+    if (!LittleFS.exists(kWifiConfigPath) ||
+        !LittleFS.remove(kWifiConfigPath) ||
+        !LittleFS.rename(kWifiConfigTempPath, kWifiConfigPath)) {
+      LittleFS.remove(kWifiConfigTempPath);
+      return false;
+    }
+  }
+  // Read it back: a short flash write must not be reported as saved.
+  char verify[kWifiConfigMaxBytes] = {0};
+  if (!readFileInto(kWifiConfigPath, verify, sizeof(verify)) ||
+      std::strcmp(verify, text) != 0) {
+    LittleFS.remove(kWifiConfigPath);
     return false;
   }
   littlefsReady_ = true;
   return true;
 }
 
-void WifiManager::restoreConfigFile(const char* previous, bool hadFile) {
+bool WifiManager::restoreConfigFile(const char* previous, bool hadFile) {
   if (!ensureFileSystem(false)) {
-    return;
+    return false;
   }
   if (!hadFile || previous == nullptr || previous[0] == '\0') {
-    LittleFS.remove(kWifiConfigPath);
-    return;
+    return !LittleFS.exists(kWifiConfigPath) || LittleFS.remove(kWifiConfigPath);
   }
-  writeConfigFile(previous);
+  return writeConfigFile(previous);
 }
 
 bool WifiManager::readNvsConfig(char* ssid, size_t ssidSize, char* password,
@@ -197,6 +246,15 @@ bool WifiManager::readNvsConfig(char* ssid, size_t ssidSize, char* password,
       present ? preferences.getString(kPasswordKey, "") : String();
   preferences.end();
   if (!present) {
+    return false;
+  }
+  // Validate the stored length before copying: a truncated SSID would point at
+  // a different network instead of being rejected like v0.4.0 did.
+  if (storedSsid.length() > kWifiSsidMaxLength ||
+      storedPassword.length() > kWifiPasswordMaxLength ||
+      storedSsid.length() + 1 > ssidSize ||
+      storedPassword.length() + 1 > passwordSize) {
+    Serial.println("wifi: nvs credentials are too long, ignoring them");
     return false;
   }
   copyString(ssid, ssidSize, storedSsid.c_str());
@@ -236,24 +294,35 @@ bool WifiManager::saveCredentials(const WifiCredentials& credentials) {
     return false;
   }
 
-  char previous[kWifiConfigMaxBytes] = {0};
-  const bool hadFile = readConfigFile(previous, sizeof(previous));
-  const bool fileOk = writeConfigFile(json);
-  const bool nvsOk = writeNvsConfig(credentials);
+  const bool fsReady = littlefsReady_ || ensureFileSystem(true);
+  if (fsReady) {
+    char previous[kWifiConfigMaxBytes] = {0};
+    const bool hadFile = readFileInto(kWifiConfigPath, previous, sizeof(previous));
 
-  if (!nvsOk) {
-    // NVS is the fallback that always exists; when it refused the new pair,
-    // the file must go back to what it held so the two do not disagree.
-    if (fileOk) {
-      restoreConfigFile(previous, hadFile);
+    // /wifi.json is the copy the next boot prefers, so the save only succeeds
+    // when the new pair is really in it. Reporting success with an older file
+    // left behind would reconnect to the old network after a reset.
+    if (!writeConfigFile(json)) {
+      Serial.println("wifi: could not write /wifi.json, save failed");
+      return false;
     }
-    return false;
-  }
-  if (fileOk) {
+    if (!writeNvsConfig(credentials)) {
+      // Keep the two stores on the pair the user had before this attempt.
+      if (!restoreConfigFile(previous, hadFile)) {
+        LittleFS.remove(kWifiConfigPath);
+      }
+      Serial.println("wifi: nvs write failed, previous settings restored");
+      return false;
+    }
     configSource_ = WifiConfigSource::kLittleFs;
   } else {
+    // LittleFS is not usable at all (no file can exist on it), so NVS is the
+    // only store; the next boot will find no file and use NVS.
+    if (!writeNvsConfig(credentials)) {
+      return false;
+    }
     configSource_ = WifiConfigSource::kNvs;
-    Serial.println("wifi: littlefs write failed, saved in nvs only");
+    Serial.println("wifi: littlefs unavailable, saved in nvs only");
   }
 
   credentials_ = credentials;
@@ -261,20 +330,37 @@ bool WifiManager::saveCredentials(const WifiCredentials& credentials) {
   return true;
 }
 
-void WifiManager::clearCredentials() {
+bool WifiManager::clearCredentials() {
+  bool nvsOk = true;
   Preferences preferences;
   if (preferences.begin(kPreferencesNamespace, false)) {
-    preferences.remove(kSsidKey);
-    preferences.remove(kPasswordKey);
+    nvsOk = preferences.remove(kSsidKey);
+    nvsOk = preferences.remove(kPasswordKey) && nvsOk;
     preferences.end();
   }
+
+  bool fileOk = true;
   if (ensureFileSystem(false)) {
-    LittleFS.remove(kWifiConfigPath);
+    if (LittleFS.exists(kWifiConfigPath) && !LittleFS.remove(kWifiConfigPath)) {
+      // A file that cannot be deleted would bring the old network back on the
+      // next boot; replace it with a pair that cannot be used instead.
+      fileOk = writeConfigFile("{\"version\":1}\n");
+      if (!fileOk) {
+        Serial.println("wifi: could not delete or blank /wifi.json");
+      }
+    }
     LittleFS.remove(kWifiConfigTempPath);
+  }
+
+  if (!nvsOk || !fileOk) {
+    // Nothing is reported as cleared unless both stores really are.
+    Serial.println("wifi: stored credentials could not be cleared completely");
+    return false;
   }
   configSource_ = WifiConfigSource::kNone;
   credentials_ = WifiCredentials{};
   startAccessPoint();
+  return true;
 }
 
 void WifiManager::generateSetupPassword() {
