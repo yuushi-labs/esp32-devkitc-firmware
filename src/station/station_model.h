@@ -11,6 +11,7 @@
 #include "display/framebuffer.h"
 #include "display/page_lines.h"
 #include "net/wifi_credentials.h"
+#include "pet/pet_model.h"
 #include "sensors/sensor_snapshot.h"
 
 namespace fw {
@@ -19,7 +20,10 @@ class GraphBuffer;
 class QrCode;
 
 enum class StationMode {
-  kEnvironment = 0,
+  // The dot-art cat that greets the device on power-up; the other modes are
+  // one BAK press (or one menu step) away.
+  kPet = 0,
+  kEnvironment,
   kLogs,
   kWifi,
   kBle,
@@ -27,14 +31,14 @@ enum class StationMode {
   kSystem,
 };
 
-constexpr size_t kStationModeCount = 6;
+constexpr size_t kStationModeCount = 7;
 
 const char* stationModeName(StationMode mode);
 StationMode nextStationMode(StationMode mode);
 StationMode previousStationMode(StationMode mode);
 StationMode stationModeFromIndex(size_t index);
-// Accepts "env", "environment", "logs", "log", "wifi", "ble", "bluetooth",
-// "timer", "system", "sys" and "1".."6".
+// Accepts "pet", "cat", "virtualpet", "env", "environment", "logs", "log",
+// "wifi", "ble", "bluetooth", "timer", "system", "sys" and "1".."7".
 bool stationModeFromName(const char* name, StationMode* out);
 
 enum class EnvView { kSummary = 0, kGraph, kDetail };
@@ -97,9 +101,11 @@ struct StationView {
   const GraphBuffer* pressureGraph = nullptr;
   bool qrVisible = false;
   const QrCode* qrCode = nullptr;
+  // Filled while the pet screen is up; sees the whole animation state.
+  const PetScene* pet = nullptr;
 };
 
-// Home menu with the six modes and the cursor on `view.menuSelection`.
+// Home menu with all modes and the cursor on `view.menuSelection`.
 void buildStationMenu(const StationView& view, PageLines* out);
 
 // Renders one mode page. The environment graph screen is pixel based, so the
@@ -142,15 +148,21 @@ class StationController {
   void menuMove(int delta);
   bool enter();
   bool back();
+  // Jumps to the home menu with the current mode selected (the BAK press on
+  // the pet screen). Returns false when the menu is already open.
+  bool openMenu();
   bool selectMode(StationMode mode);
   bool selectModeIndex(size_t oneBased);
   bool selectModeByName(const char* name);
   void cycleEnvView(int delta);
+  // Jumps straight to a sub view of the environment page (web remote).
+  void setEnvView(EnvView view) { envView_ = view; }
 
  private:
-  StationScreen screen_ = StationScreen::kMenu;
-  StationMode mode_ = StationMode::kEnvironment;
-  StationMode menuSelection_ = StationMode::kEnvironment;
+  // The station boots into the pet, not the menu.
+  StationScreen screen_ = StationScreen::kMode;
+  StationMode mode_ = StationMode::kPet;
+  StationMode menuSelection_ = StationMode::kPet;
   EnvView envView_ = EnvView::kSummary;
 };
 

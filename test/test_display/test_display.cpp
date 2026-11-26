@@ -3,6 +3,7 @@
 #include <cstring>
 #include <vector>
 
+#include "app_config.h"
 #include "display/framebuffer.h"
 #include "display/page_lines.h"
 #include "display/ssd1306.h"
@@ -295,12 +296,60 @@ void test_flush_failure_is_reported() {
   TEST_ASSERT_FALSE(display.flush());
 }
 
+void test_power_off_sends_display_off_and_stops_flushing() {
+  FakeI2cTransport bus;
+  bus.addDevice(fw::kOledPrimaryAddress);
+  Framebuffer framebuffer;
+  Ssd1306Display display(bus, fw::kOledPrimaryAddress, framebuffer);
+  TEST_ASSERT_TRUE(display.begin());
+  TEST_ASSERT_TRUE(display.power());
+
+  framebuffer.setPixel(0, 0);
+  TEST_ASSERT_TRUE(display.setPower(false));
+  TEST_ASSERT_FALSE(display.power());
+  // The last commands sent are 0x00 (command stream) then 0xAE (display off).
+  const std::vector<uint8_t>& off = bus.writeLog.back();
+  TEST_ASSERT_EQUAL_UINT32(2, static_cast<uint32_t>(off.size()));
+  TEST_ASSERT_EQUAL_UINT8(0x00, off[0]);
+  TEST_ASSERT_EQUAL_UINT8(0xAE, off[1]);
+
+  // A dark panel costs no I2C traffic at all.
+  const uint32_t writes = bus.writeCount;
+  TEST_ASSERT_TRUE(display.flush());
+  TEST_ASSERT_EQUAL_UINT32(writes, bus.writeCount);
+
+  // Turning it back on restores the picture with the next flush.
+  TEST_ASSERT_TRUE(display.setPower(true));
+  TEST_ASSERT_TRUE(display.power());
+  const std::vector<uint8_t>& on = bus.writeLog.back();
+  TEST_ASSERT_EQUAL_UINT8(0xAF, on[1]);
+  TEST_ASSERT_TRUE(display.flush());
+  TEST_ASSERT_TRUE(bus.writeCount > writes);
+}
+
+void test_power_commands_need_a_working_panel() {
+  FakeI2cTransport bus;
+  bus.addDevice(fw::kOledPrimaryAddress);
+  Framebuffer framebuffer;
+  Ssd1306Display display(bus, fw::kOledPrimaryAddress, framebuffer);
+  // Not initialised yet: the driver refuses to pretend the panel listened.
+  TEST_ASSERT_FALSE(display.setPower(false));
+  TEST_ASSERT_TRUE(display.power());
+
+  TEST_ASSERT_TRUE(display.begin());
+  bus.failWrites = true;
+  TEST_ASSERT_FALSE(display.setPower(false));
+  TEST_ASSERT_TRUE(display.power());
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
   (void)argc;
   (void)argv;
   UNITY_BEGIN();
+  RUN_TEST(test_power_off_sends_display_off_and_stops_flushing);
+  RUN_TEST(test_power_commands_need_a_working_panel);
   RUN_TEST(test_new_framebuffer_is_blank);
   RUN_TEST(test_pixels_are_page_addressed_and_clipped);
   RUN_TEST(test_clear_and_fill_rect);

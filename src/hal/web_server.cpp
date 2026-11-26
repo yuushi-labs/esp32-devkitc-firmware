@@ -3,6 +3,7 @@
 #include <LittleFS.h>
 #include <esp_random.h>
 
+#include <cstdio>
 #include <cstring>
 #include <memory>
 #include <new>
@@ -18,6 +19,7 @@ constexpr size_t kLogJsonRows = 120;
 constexpr size_t kLogJsonBufferSize = 20000;
 constexpr size_t kSetupBufferSize = 12000;
 constexpr size_t kStatusBufferSize = 1536;
+constexpr size_t kOledBufferSize = 512;
 constexpr size_t kMaxScannedSsids = 12;
 // Give the browser time to render the "saved" page before the AP goes down.
 constexpr uint32_t kSaveDelayMs = 1500;
@@ -36,6 +38,8 @@ void StationWebServer::begin(WifiManager& wifi, WebDashboardHost& host) {
 
   server_.on("/", HTTP_GET, [this]() { handleRoot(); });
   server_.on("/api/status", HTTP_GET, [this]() { handleStatus(); });
+  server_.on("/api/oled", HTTP_GET, [this]() { handleOledState(); });
+  server_.on("/api/oled", HTTP_POST, [this]() { handleOledControl(); });
   server_.on("/api/logs", HTTP_GET, [this]() { handleLogs(); });
   server_.on("/download", HTTP_GET, [this]() { handleDownload(); });
   server_.on("/api/log/clear", HTTP_POST, [this]() { handleClear(); });
@@ -91,6 +95,52 @@ void StationWebServer::handleStatus() {
     return;
   }
   server_.send(200, "application/json", buffer.get());
+}
+
+void StationWebServer::handleOledState() {
+  if (host_ == nullptr) {
+    server_.send(503, "application/json", "{\"error\":\"starting\"}");
+    return;
+  }
+  std::unique_ptr<char[]> buffer(new (std::nothrow) char[kOledBufferSize]);
+  if (!buffer) {
+    server_.send(500, "application/json", "{\"error\":\"out of memory\"}");
+    return;
+  }
+  const size_t needed = host_->buildOledJson(buffer.get(), kOledBufferSize);
+  if (needed >= kOledBufferSize) {
+    server_.send(500, "application/json", "{\"error\":\"oled state too large\"}");
+    return;
+  }
+  server_.send(200, "application/json", buffer.get());
+}
+
+void StationWebServer::handleOledControl() {
+  if (host_ == nullptr) {
+    server_.send(503, "application/json", "{\"error\":\"starting\"}");
+    return;
+  }
+  // The dashboard posts a form body; a plain link can also pass the fields in
+  // the query string. WebServer decodes both into args.
+  const String power = server_.hasArg("power") ? server_.arg("power") : String();
+  const String mode = server_.hasArg("mode") ? server_.arg("mode") : String();
+  const String action = server_.hasArg("action") ? server_.arg("action") : String();
+  const String view = server_.hasArg("view") ? server_.arg("view") : String();
+  OledCommand command;
+  const char* error = nullptr;
+  if (!parseOledCommand(power.c_str(), mode.c_str(), action.c_str(), view.c_str(),
+                        &command, &error)) {
+    char message[160];
+    std::snprintf(message, sizeof(message), "{\"error\":\"%s\"}",
+                  error != nullptr ? error : "bad request");
+    server_.send(400, "application/json", message);
+    return;
+  }
+  if (!host_->handleOledCommand(command)) {
+    server_.send(500, "application/json", "{\"error\":\"oled command failed\"}");
+    return;
+  }
+  handleOledState();
 }
 
 void StationWebServer::handleLogs() {

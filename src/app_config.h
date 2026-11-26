@@ -5,7 +5,7 @@
 #include <cstdint>
 
 #ifndef FW_VERSION
-#define FW_VERSION "0.3.1"
+#define FW_VERSION "0.4.0"
 #endif
 
 #ifndef FW_BOARD
@@ -82,6 +82,10 @@ constexpr uint32_t kDhtPollIntervalMs = 2500;
 // The panel is only re-sent when its pixels change; this is the cap for the
 // time based parts of the UI (clock, countdown).
 constexpr uint32_t kDisplayRefreshMs = 500;
+// The pet walks and wags its tail, so its screen is rebuilt more often. A full
+// frame costs about 90 ms on the 100 kHz bus, so 250 ms keeps the I2C bus free
+// for the sensors while the animation still looks alive.
+constexpr uint32_t kPetRefreshMs = 250;
 
 // A pressure change of this many hPa counts as a trend (rising/falling).
 constexpr float kPressureTrendThresholdHpa = 0.25f;

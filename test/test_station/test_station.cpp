@@ -68,32 +68,60 @@ StationView healthyView() {
   return view;
 }
 
-void test_menu_lists_six_modes_with_cursor() {
+void test_menu_lists_all_seven_modes_with_cursor() {
   StationView view = healthyView();
   view.menuSelection = StationMode::kWifi;
-  view.wifiConnected = true;
-  std::snprintf(view.ip, sizeof(view.ip), "192.168.1.42");
 
   PageLines page;
   buildStationMenu(view, &page);
+  // The title carries the clock and the seven modes fill the remaining lines.
   TEST_ASSERT_EQUAL_UINT32(8, page.count);
-  TEST_ASSERT_EQUAL_STRING("STATION MENU", page.lines[0].text);
-  TEST_ASSERT_EQUAL_STRING(" 1 ENV MONITOR", page.lines[1].text);
-  TEST_ASSERT_EQUAL_STRING(" 2 LOG LittleFS", page.lines[2].text);
-  TEST_ASSERT_EQUAL_STRING(">3 WIFI & WEB", page.lines[3].text);
-  TEST_ASSERT_EQUAL_STRING(" 4 BLUETOOTH", page.lines[4].text);
-  TEST_ASSERT_EQUAL_STRING(" 5 TIMER", page.lines[5].text);
-  TEST_ASSERT_EQUAL_STRING(" 6 SYSTEM", page.lines[6].text);
-  TEST_ASSERT_EQUAL_STRING("12:34 192.168.1.42", page.lines[7].text);
+  TEST_ASSERT_EQUAL_STRING("STATION MENU 12:34", page.lines[0].text);
+  TEST_ASSERT_EQUAL_STRING(" 1 PET CAT", page.lines[1].text);
+  TEST_ASSERT_EQUAL_STRING(" 2 ENV MONITOR", page.lines[2].text);
+  TEST_ASSERT_EQUAL_STRING(" 3 LOG LittleFS", page.lines[3].text);
+  TEST_ASSERT_EQUAL_STRING(">4 WIFI & WEB", page.lines[4].text);
+  TEST_ASSERT_EQUAL_STRING(" 5 BLUETOOTH", page.lines[5].text);
+  TEST_ASSERT_EQUAL_STRING(" 6 TIMER", page.lines[6].text);
+  TEST_ASSERT_EQUAL_STRING(" 7 SYSTEM", page.lines[7].text);
   TEST_ASSERT_TRUE(page.height() <= Framebuffer::kHeight);
 }
 
-void test_menu_footer_reports_offline_mode() {
+void test_menu_marks_the_selected_pet_entry() {
   StationView view = healthyView();
-  view.wifiConnected = false;
+  view.menuSelection = StationMode::kPet;
   PageLines page;
   buildStationMenu(view, &page);
-  TEST_ASSERT_EQUAL_STRING("12:34 wifi off", page.lines[7].text);
+  TEST_ASSERT_EQUAL_STRING(">1 PET CAT", page.lines[1].text);
+  TEST_ASSERT_EQUAL_STRING(" 3 LOG LittleFS", page.lines[3].text);
+}
+
+void test_pet_page_reports_the_animation_state() {
+  StationView view = healthyView();
+  PetScene pet;
+  std::snprintf(pet.clock, sizeof(pet.clock), "12:34");
+  std::snprintf(pet.speech, sizeof(pet.speech), "nice day");
+  std::snprintf(pet.sensors, sizeof(pet.sensors), "23.4C 45%%");
+  pet.mood = PetMood::kComfortable;
+  pet.activity = PetActivity::kSit;
+  view.pet = &pet;
+
+  PageLines page;
+  buildStationPage(StationMode::kPet, view, &page);
+  TEST_ASSERT_TRUE(pageHas(page, "VIRTUAL PET"));
+  TEST_ASSERT_TRUE(pageHas(page, "12:34 nice"));
+  TEST_ASSERT_TRUE(pageHas(page, "state sit"));
+  TEST_ASSERT_TRUE(pageHas(page, "nice day"));
+  TEST_ASSERT_TRUE(pageHas(page, "BAK menu"));
+}
+
+void test_pet_page_without_a_scene_falls_back_to_text() {
+  StationView view = healthyView();
+  view.pet = nullptr;
+  PageLines page;
+  buildStationPage(StationMode::kPet, view, &page);
+  TEST_ASSERT_TRUE(pageHas(page, "VIRTUAL PET"));
+  TEST_ASSERT_TRUE(pageHas(page, "state walk"));
 }
 
 void test_environment_summary_shows_every_reading() {
@@ -249,6 +277,7 @@ void test_system_page_lists_links_and_storage() {
 
 void test_mode_names_and_cycle() {
   TEST_ASSERT_EQUAL_STRING("environment", stationModeName(StationMode::kEnvironment));
+  TEST_ASSERT_EQUAL_STRING("pet", stationModeName(StationMode::kPet));
   TEST_ASSERT_EQUAL_STRING("logs", stationModeName(StationMode::kLogs));
   TEST_ASSERT_EQUAL_STRING("wifi", stationModeName(StationMode::kWifi));
   TEST_ASSERT_EQUAL_STRING("ble", stationModeName(StationMode::kBle));
@@ -257,12 +286,14 @@ void test_mode_names_and_cycle() {
 
   TEST_ASSERT_EQUAL_INT(static_cast<int>(StationMode::kLogs),
                         static_cast<int>(nextStationMode(StationMode::kEnvironment)));
-  TEST_ASSERT_EQUAL_INT(static_cast<int>(StationMode::kEnvironment),
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(StationMode::kPet),
                         static_cast<int>(nextStationMode(StationMode::kSystem)));
   TEST_ASSERT_EQUAL_INT(static_cast<int>(StationMode::kSystem),
-                        static_cast<int>(previousStationMode(StationMode::kEnvironment)));
-  TEST_ASSERT_EQUAL_INT(static_cast<int>(StationMode::kEnvironment),
-                        static_cast<int>(stationModeFromIndex(6)));
+                        static_cast<int>(previousStationMode(StationMode::kPet)));
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(StationMode::kPet),
+                        static_cast<int>(stationModeFromIndex(7)));
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(StationMode::kLogs),
+                        static_cast<int>(stationModeFromIndex(2)));
 }
 
 void test_mode_names_parse() {
@@ -276,8 +307,16 @@ void test_mode_names_parse() {
   TEST_ASSERT_TRUE(stationModeFromName("bluetooth", &mode));
   TEST_ASSERT_EQUAL_INT(static_cast<int>(StationMode::kBle), static_cast<int>(mode));
   TEST_ASSERT_TRUE(stationModeFromName("6", &mode));
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(StationMode::kTimer), static_cast<int>(mode));
+  TEST_ASSERT_TRUE(stationModeFromName("7", &mode));
   TEST_ASSERT_EQUAL_INT(static_cast<int>(StationMode::kSystem), static_cast<int>(mode));
-  TEST_ASSERT_FALSE(stationModeFromName("7", &mode));
+  TEST_ASSERT_TRUE(stationModeFromName("1", &mode));
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(StationMode::kPet), static_cast<int>(mode));
+  TEST_ASSERT_TRUE(stationModeFromName("pet", &mode));
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(StationMode::kPet), static_cast<int>(mode));
+  TEST_ASSERT_TRUE(stationModeFromName("CAT", &mode));
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(StationMode::kPet), static_cast<int>(mode));
+  TEST_ASSERT_FALSE(stationModeFromName("8", &mode));
   TEST_ASSERT_FALSE(stationModeFromName("bogus", &mode));
   TEST_ASSERT_FALSE(stationModeFromName(nullptr, &mode));
 }
@@ -294,20 +333,41 @@ void test_environment_view_cycles() {
                         static_cast<int>(previousEnvView(EnvView::kSummary)));
 }
 
+void test_controller_boots_into_the_pet() {
+  StationController controller;
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(StationScreen::kMode),
+                        static_cast<int>(controller.screen()));
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(StationMode::kPet),
+                        static_cast<int>(controller.mode()));
+  // BAK on the pet screen: the home menu opens with the pet selected.
+  TEST_ASSERT_TRUE(controller.openMenu());
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(StationScreen::kMenu),
+                        static_cast<int>(controller.screen()));
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(StationMode::kPet),
+                        static_cast<int>(controller.menuSelection()));
+  TEST_ASSERT_FALSE(controller.openMenu());
+}
+
 void test_controller_navigation() {
   StationController controller;
+  TEST_ASSERT_TRUE(controller.selectMode(StationMode::kEnvironment));
+  TEST_ASSERT_TRUE(controller.selectModeByName("menu"));
   TEST_ASSERT_EQUAL_INT(static_cast<int>(StationScreen::kMenu),
                         static_cast<int>(controller.screen()));
   TEST_ASSERT_EQUAL_INT(static_cast<int>(StationMode::kEnvironment),
                         static_cast<int>(controller.menuSelection()));
 
   controller.menuMove(-1);
-  TEST_ASSERT_EQUAL_INT(static_cast<int>(StationMode::kSystem),
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(StationMode::kPet),
                         static_cast<int>(controller.menuSelection()));
   controller.menuMove(1);
   TEST_ASSERT_EQUAL_INT(static_cast<int>(StationMode::kEnvironment),
                         static_cast<int>(controller.menuSelection()));
-  controller.menuMove(7);
+  controller.menuMove(3);
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(StationMode::kBle),
+                        static_cast<int>(controller.menuSelection()));
+  controller.menuMove(-3);
+  controller.menuMove(1);
   TEST_ASSERT_EQUAL_INT(static_cast<int>(StationMode::kLogs),
                         static_cast<int>(controller.menuSelection()));
 
@@ -325,11 +385,17 @@ void test_controller_navigation() {
                         static_cast<int>(controller.menuSelection()));
   TEST_ASSERT_FALSE(controller.back());
 
-  TEST_ASSERT_TRUE(controller.selectModeIndex(3));
+  TEST_ASSERT_TRUE(controller.selectModeIndex(4));
   TEST_ASSERT_EQUAL_INT(static_cast<int>(StationMode::kWifi),
                         static_cast<int>(controller.mode()));
+  TEST_ASSERT_TRUE(controller.selectModeIndex(1));
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(StationMode::kPet),
+                        static_cast<int>(controller.mode()));
+  TEST_ASSERT_TRUE(controller.selectModeIndex(7));
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(StationMode::kSystem),
+                        static_cast<int>(controller.mode()));
   TEST_ASSERT_FALSE(controller.selectModeIndex(0));
-  TEST_ASSERT_FALSE(controller.selectModeIndex(7));
+  TEST_ASSERT_FALSE(controller.selectModeIndex(8));
 
   TEST_ASSERT_TRUE(controller.selectModeByName("menu"));
   TEST_ASSERT_EQUAL_INT(static_cast<int>(StationScreen::kMenu),
@@ -475,8 +541,11 @@ int main(int argc, char** argv) {
   (void)argc;
   (void)argv;
   UNITY_BEGIN();
-  RUN_TEST(test_menu_lists_six_modes_with_cursor);
-  RUN_TEST(test_menu_footer_reports_offline_mode);
+  RUN_TEST(test_menu_lists_all_seven_modes_with_cursor);
+  RUN_TEST(test_menu_marks_the_selected_pet_entry);
+  RUN_TEST(test_pet_page_reports_the_animation_state);
+  RUN_TEST(test_pet_page_without_a_scene_falls_back_to_text);
+  RUN_TEST(test_controller_boots_into_the_pet);
   RUN_TEST(test_environment_summary_shows_every_reading);
   RUN_TEST(test_environment_summary_handles_missing_sensors);
   RUN_TEST(test_environment_summary_shows_alerts);

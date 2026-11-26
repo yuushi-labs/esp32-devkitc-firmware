@@ -21,8 +21,15 @@ class Ssd1306Display {
   // Same, after switching to the detected address (0x3C/0x3D).
   bool begin(uint8_t address);
 
-  // Uploads the whole framebuffer, page by page.
+  // Uploads the whole framebuffer, page by page. Does nothing while the panel
+  // is powered off, so a dark screen costs no I2C bandwidth.
   bool flush();
+
+  // Hardware display on/off (SSD1306_DISPLAYON / SSD1306_DISPLAYOFF). The
+  // controller and its RAM keep their contents, so turning the panel back on
+  // restores the last picture without a refresh.
+  bool setPower(bool on);
+  bool power() const { return power_; }
 
   bool present();
   bool initialised() const { return initialised_; }
@@ -42,6 +49,7 @@ class Ssd1306Display {
   uint8_t address_;
   Framebuffer& framebuffer_;
   bool initialised_ = false;
+  bool power_ = true;
 };
 
 }  // namespace fw

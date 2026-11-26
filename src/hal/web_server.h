@@ -10,6 +10,7 @@
 #include "net/setup_session.h"
 #include "net/web_dashboard.h"
 #include "net/wifi_credentials.h"
+#include "station/oled_remote.h"
 
 namespace fw {
 
@@ -21,6 +22,10 @@ class WebDashboardHost {
  public:
   virtual ~WebDashboardHost() = default;
   virtual size_t buildStatusJson(char* out, size_t outSize) = 0;
+  // GET /api/oled
+  virtual size_t buildOledJson(char* out, size_t outSize) = 0;
+  // POST /api/oled; false when the request cannot be applied.
+  virtual bool handleOledCommand(const OledCommand& command) = 0;
   virtual bool clearLog() = 0;
   virtual void showQr() = 0;
   virtual void saveWifiCredentials(const WifiCredentials& credentials) = 0;
@@ -41,6 +46,8 @@ class StationWebServer {
  private:
   void handleRoot();
   void handleStatus();
+  void handleOledState();
+  void handleOledControl();
   void handleLogs();
   void handleDownload();
   void handleClear();

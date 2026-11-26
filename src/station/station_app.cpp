@@ -101,6 +101,7 @@ void StationApp::begin() {
 
   updateView(millis());
   redraw();
+  Serial.println("screen: pet (BAK opens the menu)");
 }
 
 void StationApp::loop() {
@@ -114,6 +115,7 @@ void StationApp::loop() {
   pollSensors(nowMs);
   pollDht(nowMs);
   sampleGraphs(nowMs);
+  updatePet(nowMs);
 
   timer_.update(nowMs);
   if (timer_.consumeFinished()) {
@@ -148,7 +150,13 @@ void StationApp::loop() {
     dirty_ = true;
   }
 
-  if (dirty_ || (nowMs - lastDisplayMs_) >= kDisplayRefreshMs) {
+  // The pet screen animates, so it is rebuilt more often than the text pages;
+  // both still skip the I2C transfer when the pixels did not change.
+  const uint32_t refreshMs = controller_.screen() == StationScreen::kMode &&
+                                     controller_.mode() == StationMode::kPet
+                                 ? kPetRefreshMs
+                                 : kDisplayRefreshMs;
+  if (dirty_ || (nowMs - lastDisplayMs_) >= refreshMs) {
     updateView(nowMs);
     redraw();
     lastDisplayMs_ = nowMs;
@@ -242,6 +250,50 @@ void StationApp::pollDht(uint32_t nowMs) {
   dirty_ = true;
 }
 
+void StationApp::updatePet(uint32_t nowMs) {
+  CivilTime civil;
+  const int64_t epoch = wifi_.epochSeconds();
+  const bool synced = epoch > 0;
+  if (synced) {
+    civil = civilTimeFromUnix(epoch + kLocalUtcOffsetSeconds);
+  }
+  pet_.update(nowMs, synced, civil, snapshot_);
+  if (pet_.consumeChimeEvent()) {
+    // The chime plays on its own once an hour; log it so the serial monitor
+    // shows that the trigger fired.
+    Serial.printf("pet: %s clock chime\n", pet_.scene().clockText);
+    dirty_ = true;
+  }
+}
+
+void StationApp::setOledPower(bool on) {
+  if (oledPower_ == on) {
+    return;
+  }
+  oledPower_ = on;
+  if (displayReady_ && !display_.setPower(on)) {
+    displayReady_ = false;
+    frameSent_ = false;
+    Serial.println("oled: power command failed, continuing without the panel");
+    return;
+  }
+  if (on) {
+    // The panel kept its RAM, but the frame hash only describes frames this
+    // driver really sent, so the next redraw writes the picture again.
+    frameSent_ = false;
+  }
+  dirty_ = true;
+  Serial.printf("oled: display %s\n", on ? "on" : "off");
+}
+
+void StationApp::testClockChime() {
+  updateView(millis());
+  const char* text = (wifi_.ntpSynced() && view_.clock[0] != '-') ? view_.clock : "07:00";
+  pet_.playClockChime(millis(), text);
+  dirty_ = true;
+  Serial.printf("pet: clock chime %s (test)\n", text);
+}
+
 void StationApp::sampleGraphs(uint32_t nowMs) {
   if ((nowMs - lastGraphSampleMs_) < kGraphSampleIntervalMs) {
     return;
@@ -256,10 +308,19 @@ void StationApp::sampleGraphs(uint32_t nowMs) {
 }
 
 void StationApp::updateQrPayload() {
-  // The code has to work in both Wi-Fi states: the station IP once the stored
-  // network is up, and the setup AP address while the AP is serving the form.
-  formatDashboardUrl(wifi_.connected(), wifi_.ip(), wifi_.apActive(), stationUrl_,
-                     sizeof(stationUrl_));
+  // Two kinds of code share the panel. On a network the QR opens the dashboard;
+  // while the setup AP is up it is a Wi-Fi join code, so a phone joins the
+  // station's own network with one scan instead of typing the WPA2 key.
+  if (wifi_.connected()) {
+    formatDashboardUrl(true, wifi_.ip(), false, qrPayload_, sizeof(qrPayload_));
+    return;
+  }
+  if (wifi_.apActive()) {
+    formatWifiQrPayload(kSetupApSsid, wifi_.setupApPassword(), qrPayload_,
+                        sizeof(qrPayload_));
+    return;
+  }
+  qrPayload_[0] = '\0';
 }
 
 void StationApp::updateView(uint32_t nowMs) {
@@ -289,10 +350,12 @@ void StationApp::updateView(uint32_t nowMs) {
   const int64_t epoch = wifi_.epochSeconds();
   if (epoch > 0) {
     formatClockTime(epoch, kLocalUtcOffsetSeconds, view_.clock, sizeof(view_.clock));
-    updateQrPayload();
   } else {
     std::snprintf(view_.clock, sizeof(view_.clock), "--:--");
   }
+  // The payload also has to be built in setup AP mode, where there is no NTP
+  // time yet: it is the Wi-Fi join code, not a clock-driven URL.
+  updateQrPayload();
 
   view_.bleEnabled = ble_.enabled();
   view_.bleHidMode = ble_.hidMode();
@@ -310,12 +373,16 @@ void StationApp::updateView(uint32_t nowMs) {
   view_.pressureGraph = &pressureGraph_;
   view_.qrVisible = qrVisible_;
   view_.qrCode = &qr_;
+  view_.pet = &pet_.scene();
 }
 
 void StationApp::redraw() {
   bool drawLines = true;
   if (controller_.screen() == StationScreen::kMenu) {
     buildStationMenu(view_, &page_);
+  } else if (controller_.mode() == StationMode::kPet && view_.pet != nullptr) {
+    drawPetScreen(*view_.pet, &framebuffer_);
+    drawLines = false;
   } else if (controller_.mode() == StationMode::kEnvironment &&
              controller_.envView() == EnvView::kGraph) {
     buildStationGraphScreen(view_, &framebuffer_);
@@ -328,7 +395,7 @@ void StationApp::redraw() {
       // instead of a QR that no camera can read.
       page_.clear();
       page_.add("QR too large");
-      page_.add(stationUrl_);
+      page_.add(qrPayload_);
       drawPageLines(framebuffer_, page_);
     }
   } else {
@@ -338,7 +405,9 @@ void StationApp::redraw() {
   if (drawLines) {
     drawPageLines(framebuffer_, page_);
   }
-  if (displayReady_) {
+  // While the panel is dark nothing is sent, and no frame hash is recorded: the
+  // picture in RAM is stale as soon as the panel comes back on.
+  if (displayReady_ && oledPower_) {
     const uint32_t hash = frameHash(framebuffer_);
     if (!frameSent_ || hash != lastFrameHash_) {
       if (display_.flush()) {
@@ -386,6 +455,14 @@ void StationApp::leaveMode(StationMode mode) {
 }
 
 void StationApp::handleInputs(const InputEvent& event, uint32_t nowMs) {
+  if (!oledPower_ && event.any()) {
+    // A dark panel wakes on any key or detent. The press that wakes it is
+    // swallowed so it cannot also change the screen by accident.
+    setOledPower(true);
+    Serial.println("oled: on (input)");
+    return;
+  }
+
   const bool push = event.press[static_cast<size_t>(InputButton::kPush)];
   const bool back = event.press[static_cast<size_t>(InputButton::kBack)];
   const bool confirm = event.press[static_cast<size_t>(InputButton::kConfirm)];
@@ -440,6 +517,7 @@ void StationApp::handleInputs(const InputEvent& event, uint32_t nowMs) {
         Serial.printf("input: timer %u min\n", static_cast<unsigned>(timer_.minutes()));
         dirty_ = true;
         break;
+      case StationMode::kPet:
       case StationMode::kWifi:
       case StationMode::kSystem:
         break;
@@ -458,6 +536,20 @@ void StationApp::handleModeInputs(const InputEvent& event, uint32_t nowMs) {
   const bool confirmRelease = event.release[static_cast<size_t>(InputButton::kConfirm)];
 
   switch (controller_.mode()) {
+    case StationMode::kPet:
+      // BAK leaves the pet for the menu, like every other mode; CON replays the
+      // hourly chime so the animation can be checked on the device.
+      if (back) {
+        controller_.openMenu();
+        Serial.printf("input: BAK -> menu (selection %s)\n",
+                      stationModeName(controller_.menuSelection()));
+        dirty_ = true;
+      }
+      if (confirm) {
+        testClockChime();
+      }
+      break;
+
     case StationMode::kEnvironment:
       if (push || confirm) {
         controller_.cycleEnvView(1);
@@ -634,8 +726,9 @@ void StationApp::printWifiStatus() {
   char buffer[320];
   formatWifiStatus(status, buffer, sizeof(buffer));
   printLine(buffer);
-  if (stationUrl_[0] != '\0') {
-    Serial.printf("  dashboard: %s\n", stationUrl_);
+  if (qrPayload_[0] != '\0') {
+    Serial.printf("  %s: %s\n", isWifiQrPayload(qrPayload_) ? "wifi qr" : "dashboard",
+                  qrPayload_);
   }
 }
 
@@ -650,6 +743,30 @@ void StationApp::printTimerStatus() {
   char buffer[256];
   timer_.formatStatus(buffer, sizeof(buffer));
   printLine(buffer);
+}
+
+void StationApp::printOledStatus() {
+  Serial.printf("oled: display=%s panel=%s address=%s\n", oledPower_ ? "on" : "off",
+                displayReady_ ? "ready" : "missing",
+                oledAddress_ != 0 ? "0x3C/0x3D" : "none");
+  if (oledAddress_ != 0) {
+    Serial.printf("  address=0x%02X mode=%s\n", static_cast<unsigned>(oledAddress_),
+                  controller_.screen() == StationScreen::kMenu
+                      ? "menu"
+                      : stationModeName(controller_.mode()));
+  }
+}
+
+void StationApp::printPetStatus() {
+  updateView(millis());
+  const PetScene& pet = pet_.scene();
+  Serial.printf("pet: activity=%s mood=%s clock=%s\n", petActivityName(pet.activity),
+                petMoodName(pet.mood), pet.clock);
+  Serial.printf("  speech=%s bubble=%s x=%d chime=%s last_hour=%d\n", pet.speech,
+                pet.bubbleVisible ? pet.bubbleText : "-",
+                static_cast<int>(pet.spriteX), pet_.chimeActive() ? "on" : "off",
+                pet_.lastChimeHour());
+  Serial.printf("  clock chime in 20s of every hour, 8s long; 'pet clock' replays it\n");
 }
 
 void StationApp::printNavigation() {
@@ -668,11 +785,11 @@ void StationApp::announceMode() {
 
 void StationApp::showQr() {
   updateQrPayload();
-  if (stationUrl_[0] == '\0') {
+  if (qrPayload_[0] == '\0') {
     Serial.println("qr: no dashboard address (wifi is not connected, setup AP is off)");
     return;
   }
-  if (!qr_.encode(stationUrl_)) {
+  if (!qr_.encode(qrPayload_)) {
     Serial.println("qr: encode failed");
     return;
   }
@@ -682,7 +799,91 @@ void StationApp::showQr() {
   qrVisible_ = true;
   qrUntilMs_ = millis() + kQrDisplayDurationMs;
   dirty_ = true;
-  Serial.printf("qr: %s\n", stationUrl_);
+  Serial.printf("qr: %s\n", qrPayload_);
+}
+
+size_t StationApp::buildOledJson(char* out, size_t outSize) {
+  updateView(millis());
+  OledState state;
+  state.power = oledPower_;
+  state.panelPresent = displayReady_;
+  state.address = oledAddress_;
+  state.screen = stationScreenName(controller_.screen());
+  state.mode = stationModeName(controller_.mode());
+  state.menu = stationModeName(controller_.menuSelection());
+  state.view = envViewName(controller_.envView());
+  state.pet = &pet_.scene();
+  return formatOledStateJson(state, out, outSize);
+}
+
+bool StationApp::handleOledCommand(const OledCommand& command) {
+  if (!command.any()) {
+    return true;
+  }
+  switch (command.power) {
+    case OledPowerAction::kOn:
+      setOledPower(true);
+      break;
+    case OledPowerAction::kOff:
+      setOledPower(false);
+      break;
+    case OledPowerAction::kToggle:
+      setOledPower(!oledPower_);
+      break;
+    case OledPowerAction::kNoChange:
+      break;
+  }
+
+  if (command.hasMenu && controller_.screen() == StationScreen::kMode) {
+    leaveMode(controller_.mode());
+    controller_.openMenu();
+    Serial.printf("web: oled -> menu (selection %s)\n",
+                  stationModeName(controller_.menuSelection()));
+    dirty_ = true;
+  }
+  if (command.hasMode) {
+    switchMode(command.mode);
+    Serial.printf("web: oled -> mode %s\n", stationModeName(command.mode));
+    dirty_ = true;
+  }
+  if (command.hasView) {
+    if (controller_.screen() != StationScreen::kMode ||
+        controller_.mode() != StationMode::kEnvironment) {
+      switchMode(StationMode::kEnvironment);
+    }
+    controller_.setEnvView(command.view);
+    Serial.printf("web: oled -> env view %s\n", envViewName(command.view));
+    dirty_ = true;
+  }
+  if (command.step != 0) {
+    if (controller_.screen() == StationScreen::kMenu) {
+      controller_.menuMove(command.step);
+      Serial.printf("web: oled menu -> %s\n",
+                    stationModeName(controller_.menuSelection()));
+    } else {
+      const StationMode target = command.step > 0
+                                     ? nextStationMode(controller_.mode())
+                                     : previousStationMode(controller_.mode());
+      switchMode(target);
+      Serial.printf("web: oled -> mode %s\n", stationModeName(target));
+    }
+    dirty_ = true;
+  }
+  if (command.select && controller_.screen() == StationScreen::kMenu) {
+    enterMode(controller_.menuSelection());
+    dirty_ = true;
+  }
+  if (command.back && controller_.screen() == StationScreen::kMode) {
+    leaveMode(controller_.mode());
+    controller_.back();
+    Serial.printf("web: oled -> menu (selection %s)\n",
+                  stationModeName(controller_.menuSelection()));
+    dirty_ = true;
+  }
+  if (command.testChime) {
+    testClockChime();
+  }
+  return true;
 }
 
 size_t StationApp::buildStatusJson(char* out, size_t outSize) {
@@ -855,6 +1056,23 @@ bool StationApp::handleCommand(const Command& command) {
       return true;
     case CommandType::kModeStatus:
       printNavigation();
+      return true;
+    case CommandType::kOledStatus:
+      printOledStatus();
+      return true;
+    case CommandType::kOledOn:
+      setOledPower(true);
+      return true;
+    case CommandType::kOledOff:
+      setOledPower(false);
+      return true;
+    case CommandType::kPetStatus:
+      printPetStatus();
+      return true;
+    case CommandType::kPetClock:
+      // The chime is a demo: switch to the pet so it is actually visible.
+      switchMode(StationMode::kPet);
+      testClockChime();
       return true;
     case CommandType::kModeSelect:
       if (!controller_.selectModeByName(command.mode)) {

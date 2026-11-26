@@ -92,6 +92,8 @@ void appendProgressBar(uint8_t progress, char* out, size_t outSize) {
 
 const char* stationModeName(StationMode mode) {
   switch (mode) {
+    case StationMode::kPet:
+      return "pet";
     case StationMode::kEnvironment:
       return "environment";
     case StationMode::kLogs:
@@ -125,6 +127,11 @@ bool stationModeFromName(const char* name, StationMode* out) {
   if (name == nullptr || out == nullptr) {
     return false;
   }
+  if (equalsIgnoreCase(name, "pet") || equalsIgnoreCase(name, "cat") ||
+      equalsIgnoreCase(name, "virtualpet") || equalsIgnoreCase(name, "pets")) {
+    *out = StationMode::kPet;
+    return true;
+  }
   if (equalsIgnoreCase(name, "env") || equalsIgnoreCase(name, "environment") ||
       equalsIgnoreCase(name, "monitor")) {
     *out = StationMode::kEnvironment;
@@ -150,7 +157,7 @@ bool stationModeFromName(const char* name, StationMode* out) {
     *out = StationMode::kSystem;
     return true;
   }
-  if (name[0] >= '1' && name[0] <= '6' && name[1] == '\0') {
+  if (name[0] >= '1' && name[0] <= '7' && name[1] == '\0') {
     *out = stationModeFromIndex(static_cast<size_t>(name[0] - '1'));
     return true;
   }
@@ -187,11 +194,16 @@ void buildStationMenu(const StationView& view, PageLines* out) {
     return;
   }
   out->clear();
-  out->add("STATION MENU");
+  // Seven entries plus the title fill the eight lines the panel has, so the
+  // clock moves into the title instead of a footer line.
+  addf(*out, 1, "STATION MENU %s", view.clock);
   for (size_t index = 0; index < kStationModeCount; ++index) {
     const StationMode mode = stationModeFromIndex(index);
     const char* label = "";
     switch (mode) {
+      case StationMode::kPet:
+        label = "PET CAT";
+        break;
       case StationMode::kEnvironment:
         label = "ENV MONITOR";
         break;
@@ -214,11 +226,6 @@ void buildStationMenu(const StationView& view, PageLines* out) {
     addf(*out, 1, "%c%u %s", mode == view.menuSelection ? '>' : ' ',
          static_cast<unsigned>(index + 1), label);
   }
-  if (view.wifiConnected) {
-    addf(*out, 1, "%s %s", view.clock, view.ip);
-  } else {
-    addf(*out, 1, "%s wifi off", view.clock);
-  }
 }
 
 void buildStationPage(StationMode mode, const StationView& view, PageLines* out) {
@@ -230,6 +237,29 @@ void buildStationPage(StationMode mode, const StationView& view, PageLines* out)
   const AlertState alerts = evaluateAlerts(sensors, view.pressureDeltaHpa);
 
   switch (mode) {
+    case StationMode::kPet: {
+      const PetScene* pet = view.pet;
+      out->add("VIRTUAL PET");
+      if (pet != nullptr) {
+        addf(*out, 1, "%s %s", pet->clock, petMoodLabel(pet->mood));
+        addf(*out, 1, "state %s", petActivityName(pet->activity));
+        if (pet->bubbleVisible) {
+          addf(*out, 2, "%s", pet->bubbleText);
+        } else {
+          addf(*out, 1, "%s", pet->speech);
+        }
+        if (pet->sensors[0] != '\0') {
+          addf(*out, 1, "%s", pet->sensors);
+        }
+      } else {
+        addf(*out, 1, "%s", view.clock);
+        out->add("state walk");
+      }
+      out->add("BAK menu");
+      out->add("CON chime");
+      break;
+    }
+
     case StationMode::kEnvironment: {
       if (view.envView == EnvView::kDetail) {
         if (sensors.bmp280Present) {
@@ -485,6 +515,15 @@ bool StationController::enter() {
   }
   mode_ = menuSelection_;
   screen_ = StationScreen::kMode;
+  return true;
+}
+
+bool StationController::openMenu() {
+  if (screen_ == StationScreen::kMenu) {
+    return false;
+  }
+  screen_ = StationScreen::kMenu;
+  menuSelection_ = mode_;
   return true;
 }
 

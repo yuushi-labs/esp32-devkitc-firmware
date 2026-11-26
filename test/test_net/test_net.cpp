@@ -5,6 +5,7 @@
 
 #include "net/ntp_clock.h"
 #include "net/setup_session.h"
+#include "station/oled_remote.h"
 #include "net/web_dashboard.h"
 #include "net/wifi_credentials.h"
 
@@ -461,6 +462,127 @@ void test_dashboard_html_is_self_contained() {
   TEST_ASSERT_NULL(std::strstr(html, "https://"));
 }
 
+void test_oled_command_parses_power_mode_and_actions() {
+  OledCommand command;
+  const char* error = nullptr;
+
+  TEST_ASSERT_TRUE(parseOledCommand("on", nullptr, nullptr, nullptr, &command, &error));
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(OledPowerAction::kOn),
+                        static_cast<int>(command.power));
+  TEST_ASSERT_TRUE(command.any());
+
+  TEST_ASSERT_TRUE(parseOledCommand("OFF", nullptr, nullptr, nullptr, &command, &error));
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(OledPowerAction::kOff),
+                        static_cast<int>(command.power));
+
+  TEST_ASSERT_TRUE(
+      parseOledCommand("toggle", nullptr, nullptr, nullptr, &command, &error));
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(OledPowerAction::kToggle),
+                        static_cast<int>(command.power));
+
+  // Everything empty is a no-op request.
+  TEST_ASSERT_TRUE(parseOledCommand("", "", "", "", &command, &error));
+  TEST_ASSERT_FALSE(command.any());
+
+  TEST_ASSERT_TRUE(parseOledCommand(nullptr, "pet", nullptr, nullptr, &command, &error));
+  TEST_ASSERT_TRUE(command.hasMode);
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(StationMode::kPet),
+                        static_cast<int>(command.mode));
+
+  TEST_ASSERT_TRUE(parseOledCommand(nullptr, "MENU", nullptr, nullptr, &command, &error));
+  TEST_ASSERT_TRUE(command.hasMenu);
+  TEST_ASSERT_FALSE(command.hasMode);
+
+  TEST_ASSERT_TRUE(
+      parseOledCommand(nullptr, "env", "next", "graph", &command, &error));
+  TEST_ASSERT_EQUAL_INT(1, static_cast<int>(command.step));
+  TEST_ASSERT_TRUE(command.hasView);
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(EnvView::kGraph),
+                        static_cast<int>(command.view));
+
+  TEST_ASSERT_TRUE(
+      parseOledCommand(nullptr, nullptr, "back", nullptr, &command, &error));
+  TEST_ASSERT_TRUE(command.back);
+  TEST_ASSERT_TRUE(
+      parseOledCommand(nullptr, nullptr, "select", nullptr, &command, &error));
+  TEST_ASSERT_TRUE(command.select);
+  TEST_ASSERT_TRUE(
+      parseOledCommand(nullptr, nullptr, "clock", nullptr, &command, &error));
+  TEST_ASSERT_TRUE(command.testChime);
+  TEST_ASSERT_TRUE(
+      parseOledCommand(nullptr, nullptr, "prev", nullptr, &command, &error));
+  TEST_ASSERT_EQUAL_INT(-1, static_cast<int>(command.step));
+}
+
+void test_oled_command_rejects_unknown_values() {
+  OledCommand command;
+  const char* error = nullptr;
+  TEST_ASSERT_FALSE(parseOledCommand("dim", nullptr, nullptr, nullptr, &command, &error));
+  TEST_ASSERT_NOT_NULL(error);
+  TEST_ASSERT_FALSE(parseOledCommand(nullptr, "bogus", nullptr, nullptr, &command, &error));
+  TEST_ASSERT_NOT_NULL(error);
+  TEST_ASSERT_FALSE(
+      parseOledCommand(nullptr, nullptr, "explode", nullptr, &command, &error));
+  TEST_ASSERT_NOT_NULL(error);
+  TEST_ASSERT_FALSE(
+      parseOledCommand(nullptr, nullptr, nullptr, "tilt", &command, &error));
+  TEST_ASSERT_NOT_NULL(error);
+}
+
+void test_oled_state_json_reports_the_screen() {
+  PetScene pet;
+  std::snprintf(pet.clock, sizeof(pet.clock), "14:35");
+  std::snprintf(pet.speech, sizeof(pet.speech), "nice day");
+  std::snprintf(pet.bubbleText, sizeof(pet.bubbleText), "07:00 !");
+  pet.spriteX = 42;
+  pet.mood = PetMood::kWarm;
+  pet.activity = PetActivity::kSit;
+
+  OledState state;
+  state.power = false;
+  state.panelPresent = true;
+  state.address = 0x3C;
+  state.screen = "mode";
+  state.mode = "pet";
+  state.menu = "pet";
+  state.view = "summary";
+  state.pet = &pet;
+
+  char out[512];
+  const size_t needed = formatOledStateJson(state, out, sizeof(out));
+  TEST_ASSERT_TRUE(needed < sizeof(out));
+  TEST_ASSERT_NOT_NULL(std::strstr(out, "\"power\":false"));
+  TEST_ASSERT_NOT_NULL(std::strstr(out, "\"present\":true"));
+  TEST_ASSERT_NOT_NULL(std::strstr(out, "\"address\":\"0x3C\""));
+  TEST_ASSERT_NOT_NULL(std::strstr(out, "\"screen\":\"mode\""));
+  TEST_ASSERT_NOT_NULL(std::strstr(out, "\"mode\":\"pet\""));
+  TEST_ASSERT_NOT_NULL(std::strstr(out, "\"activity\":\"sit\""));
+  TEST_ASSERT_NOT_NULL(std::strstr(out, "\"mood\":\"warm\""));
+  TEST_ASSERT_NOT_NULL(std::strstr(out, "\"clock\":\"14:35\""));
+  TEST_ASSERT_NOT_NULL(std::strstr(out, "\"bubble\":\"\""));
+  TEST_ASSERT_NOT_NULL(std::strstr(out, "\"x\":42"));
+
+  // A truncated buffer still reports the size the full JSON needs.
+  char small[32];
+  TEST_ASSERT_TRUE(formatOledStateJson(state, small, sizeof(small)) > sizeof(small));
+  TEST_ASSERT_EQUAL_CHAR('\0', small[sizeof(small) - 1]);
+
+  // Without a scene the pet block is null instead of missing.
+  OledState bare;
+  formatOledStateJson(bare, out, sizeof(out));
+  TEST_ASSERT_NOT_NULL(std::strstr(out, "\"pet\":null"));
+}
+
+void test_dashboard_ships_the_oled_remote() {
+  const char* html = dashboardHtml();
+  TEST_ASSERT_NOT_NULL(std::strstr(html, "/api/oled"));
+  TEST_ASSERT_NOT_NULL(std::strstr(html, "OLED remote"));
+  TEST_ASSERT_NOT_NULL(std::strstr(html, "data-mode=\"pet\""));
+  TEST_ASSERT_NOT_NULL(std::strstr(html, "data-view=\"graph\""));
+  TEST_ASSERT_NOT_NULL(std::strstr(html, "action:'clock'"));
+  TEST_ASSERT_NOT_NULL(std::strstr(html, "power:'toggle'"));
+}
+
 void test_setup_page_lists_and_escapes_networks() {
   const char* ssids[] = {"Home", "<script>"};
   char out[4096];
@@ -540,6 +662,10 @@ int main(int argc, char** argv) {
   RUN_TEST(test_logs_json_formats_samples);
   RUN_TEST(test_logs_json_from_csv_keeps_the_newest_rows);
   RUN_TEST(test_dashboard_html_is_self_contained);
+  RUN_TEST(test_oled_command_parses_power_mode_and_actions);
+  RUN_TEST(test_oled_command_rejects_unknown_values);
+  RUN_TEST(test_oled_state_json_reports_the_screen);
+  RUN_TEST(test_dashboard_ships_the_oled_remote);
   RUN_TEST(test_setup_page_lists_and_escapes_networks);
   RUN_TEST(test_setup_page_reloads_while_the_scan_is_empty);
   RUN_TEST(test_setup_page_does_not_reload_after_an_empty_scan);

@@ -13,6 +13,7 @@
 #include "display/ssd1306.h"
 #include "graphics/mini_graph.h"
 #include "graphics/qr_code.h"
+#include "net/wifi_qr.h"
 #include "hal/ble_service.h"
 #include "hal/dht_gpio.h"
 #include "hal/gpio_inputs.h"
@@ -22,6 +23,8 @@
 #include "hal/wire_i2c.h"
 #include "i2c_scan.h"
 #include "logging/log_record.h"
+#include "pet/pet_model.h"
+#include "pet/pet_screen.h"
 #include "sensors/bmp280.h"
 #include "station/station_model.h"
 #include "station/timer_model.h"
@@ -45,12 +48,20 @@ class StationApp : public WebDashboardHost {
 
   // WebDashboardHost
   size_t buildStatusJson(char* out, size_t outSize) override;
+  size_t buildOledJson(char* out, size_t outSize) override;
+  bool handleOledCommand(const OledCommand& command) override;
   bool clearLog() override;
   void showQr() override;
   void saveWifiCredentials(const WifiCredentials& credentials) override;
 
  private:
   void pollSensors(uint32_t nowMs);
+  void updatePet(uint32_t nowMs);
+  // Hardware display on/off; on restores the current picture.
+  void setOledPower(bool on);
+  bool oledPower() const { return oledPower_; }
+  // Replays the hourly chime for a demo from the panel, serial or the web.
+  void testClockChime();
   void pollDht(uint32_t nowMs);
   void sampleGraphs(uint32_t nowMs);
   void updateView(uint32_t nowMs);
@@ -73,6 +84,8 @@ class StationApp : public WebDashboardHost {
   void printBleStatus();
   void printTimerStatus();
   void printNavigation();
+  void printOledStatus();
+  void printPetStatus();
   void announceMode();
 
   WireI2cTransport bus_;
@@ -97,10 +110,14 @@ class StationApp : public WebDashboardHost {
   GraphBuffer temperatureGraph_{kGraphCapacity};
   GraphBuffer pressureGraph_{kGraphCapacity};
   QrCode qr_;
-  char stationUrl_[40] = {0};
+  // What the OLED QR encodes: the dashboard address, or a Wi-Fi join payload
+  // while the setup AP is up.
+  char qrPayload_[96] = {0};
+  VirtualPet pet_;
 
   uint8_t oledAddress_ = 0;
   bool displayReady_ = false;
+  bool oledPower_ = true;
   bool dirty_ = true;
   bool confirmLongFired_ = false;
   bool confirmPressedInLogs_ = false;
