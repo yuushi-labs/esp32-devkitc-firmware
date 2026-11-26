@@ -315,9 +315,13 @@ bool WifiManager::saveCredentials(const WifiCredentials& credentials) {
       return false;
     }
     if (!writeNvsConfig(credentials)) {
-      // Keep the two stores on the pair the user had before this attempt.
-      if (!restoreConfigFile(previous, hadFile)) {
-        LittleFS.remove(kWifiConfigPath);
+      // Keep the two stores on the pair the user had before this attempt. If
+      // the old pair cannot be written back, the new file is removed so the
+      // (unchanged) NVS copy is what a reset finds; a removal that fails too is
+      // reported, never silently accepted.
+      if (!restoreConfigFile(previous, hadFile) &&
+          !LittleFS.remove(kWifiConfigPath)) {
+        Serial.println("wifi: could not restore or remove /wifi.json");
       }
       Serial.println("wifi: nvs write failed, previous settings restored");
       return false;
