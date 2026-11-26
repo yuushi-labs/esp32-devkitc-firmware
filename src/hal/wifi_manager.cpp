@@ -177,16 +177,14 @@ bool WifiManager::readConfigFile(char* out, size_t outSize) const {
   return true;
 }
 
-bool WifiManager::writeConfigFile(const char* text) {
-  if (text == nullptr) {
+bool WifiManager::writeRawFile(const char* path, const char* text) {
+  if (path == nullptr || text == nullptr) {
     return false;
   }
   if (!ensureFileSystem(true)) {
     return false;
   }
-  // Write a temporary file first: the pair is complete on flash before the old
-  // /wifi.json is replaced.
-  File file = LittleFS.open(kWifiConfigTempPath, FILE_WRITE);
+  File file = LittleFS.open(path, FILE_WRITE);
   if (!file) {
     littlefsReady_ = false;
     return false;
@@ -194,7 +192,16 @@ bool WifiManager::writeConfigFile(const char* text) {
   const size_t written = file.print(text);
   const bool writeFailed = file.getWriteError();
   file.close();
-  if (writeFailed || written != std::strlen(text)) {
+  return !writeFailed && written == std::strlen(text);
+}
+
+bool WifiManager::writeConfigFile(const char* text) {
+  if (text == nullptr) {
+    return false;
+  }
+  // Write a temporary file first: the pair is complete on flash before the old
+  // /wifi.json is replaced.
+  if (!writeRawFile(kWifiConfigTempPath, text)) {
     LittleFS.remove(kWifiConfigTempPath);
     return false;
   }
@@ -334,22 +341,36 @@ bool WifiManager::clearCredentials() {
   bool nvsOk = true;
   Preferences preferences;
   if (preferences.begin(kPreferencesNamespace, false)) {
-    nvsOk = preferences.remove(kSsidKey);
-    nvsOk = preferences.remove(kPasswordKey) && nvsOk;
+    // A key that is already gone counts as cleared; Preferences::remove()
+    // reports false for a missing key.
+    if (preferences.isKey(kSsidKey)) {
+      nvsOk = preferences.remove(kSsidKey) && nvsOk;
+    }
+    if (preferences.isKey(kPasswordKey)) {
+      nvsOk = preferences.remove(kPasswordKey) && nvsOk;
+    }
     preferences.end();
   }
 
+  // A file that cannot be deleted would bring the old network back on the next
+  // boot; replace it with a content that cannot be used instead. The staged
+  // temporary file matters too: readConfigFile() adopts it when /wifi.json is
+  // gone, so it has to be neutralised the same way.
+  const char* kUnusableConfig = "{\"version\":1}\n";
   bool fileOk = true;
   if (ensureFileSystem(false)) {
     if (LittleFS.exists(kWifiConfigPath) && !LittleFS.remove(kWifiConfigPath)) {
-      // A file that cannot be deleted would bring the old network back on the
-      // next boot; replace it with a pair that cannot be used instead.
-      fileOk = writeConfigFile("{\"version\":1}\n");
+      fileOk = writeConfigFile(kUnusableConfig);
       if (!fileOk) {
         Serial.println("wifi: could not delete or blank /wifi.json");
       }
     }
-    LittleFS.remove(kWifiConfigTempPath);
+    if (LittleFS.exists(kWifiConfigTempPath) &&
+        !LittleFS.remove(kWifiConfigTempPath) &&
+        !writeRawFile(kWifiConfigTempPath, kUnusableConfig)) {
+      fileOk = false;
+      Serial.println("wifi: could not delete or blank /wifi.json.tmp");
+    }
   }
 
   if (!nvsOk || !fileOk) {

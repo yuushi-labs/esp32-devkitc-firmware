@@ -72,6 +72,7 @@ class WifiManager {
                   bool* migrate) const;
   bool readFileInto(const char* path, char* out, size_t outSize) const;
   bool readConfigFile(char* out, size_t outSize) const;
+  bool writeRawFile(const char* path, const char* text);
   bool writeConfigFile(const char* text);
   bool restoreConfigFile(const char* previous, bool hadFile);
   bool readNvsConfig(char* ssid, size_t ssidSize, char* password,
