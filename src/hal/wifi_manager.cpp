@@ -27,14 +27,10 @@ void copyString(char* out, size_t outSize, const char* value) {
   std::snprintf(out, outSize, "%s", value != nullptr ? value : "");
 }
 
-// Mounts LittleFS, formatting a brand new board when `format` is set. The log
-// recorder usually mounts it first; this keeps the Wi-Fi store independent.
-bool ensureFileSystem(bool format) {
-  if (LittleFS.begin(false)) {
-    return true;
-  }
-  return format && LittleFS.begin(true);
-}
+// Mounts the already formatted LittleFS. The log recorder formats a brand new
+// board first; nothing in the Wi-Fi store ever formats, so a save can never
+// wipe /log.csv from the shared filesystem.
+bool ensureFileSystem() { return LittleFS.begin(false); }
 
 // Puts a key back exactly as it was, or removes it when it did not exist: a
 // failed write must not leave a new SSID next to an old password.
@@ -49,7 +45,7 @@ void restoreKey(Preferences& preferences, const char* key, const String& previou
 }  // namespace
 
 void WifiManager::begin() {
-  littlefsReady_ = ensureFileSystem(true);
+  littlefsReady_ = ensureFileSystem();
 
   WifiCredentials stored;
   WifiConfigSource source = WifiConfigSource::kNone;
@@ -154,7 +150,7 @@ bool WifiManager::readConfigFile(char* out, size_t outSize) const {
     return false;
   }
   out[0] = '\0';
-  if (!ensureFileSystem(false)) {
+  if (!ensureFileSystem()) {
     return false;
   }
   if (readFileInto(kWifiConfigPath, out, outSize)) {
@@ -181,7 +177,10 @@ bool WifiManager::writeRawFile(const char* path, const char* text) {
   if (path == nullptr || text == nullptr) {
     return false;
   }
-  if (!ensureFileSystem(true)) {
+  // Never format here: the station may hold /log.csv on the same filesystem,
+  // and saving Wi-Fi settings must not throw the log away. Only the boot path
+  // formats an unformatted board.
+  if (!ensureFileSystem()) {
     return false;
   }
   File file = LittleFS.open(path, FILE_WRITE);
@@ -219,7 +218,8 @@ bool WifiManager::writeConfigFile(const char* text) {
     if (!LittleFS.exists(kWifiConfigPath) ||
         !LittleFS.remove(kWifiConfigPath) ||
         !LittleFS.rename(kWifiConfigTempPath, kWifiConfigPath)) {
-      LittleFS.remove(kWifiConfigTempPath);
+      // Leave the verified temporary copy in place: when /wifi.json is gone,
+      // the boot path adopts it, so the settings just saved are not lost.
       return false;
     }
   }
@@ -228,7 +228,7 @@ bool WifiManager::writeConfigFile(const char* text) {
 }
 
 bool WifiManager::restoreConfigFile(const char* previous, bool hadFile) {
-  if (!ensureFileSystem(false)) {
+  if (!ensureFileSystem()) {
     return false;
   }
   if (!hadFile || previous == nullptr || previous[0] == '\0') {
@@ -302,7 +302,7 @@ bool WifiManager::saveCredentials(const WifiCredentials& credentials) {
     return false;
   }
 
-  const bool fsReady = littlefsReady_ || ensureFileSystem(true);
+  const bool fsReady = littlefsReady_ || ensureFileSystem();
   if (!fsReady) {
     // Without LittleFS neither the old file nor the new one can be checked.
     // Writing only to NVS would be undone by a /wifi.json that a later mount
@@ -331,7 +331,7 @@ bool WifiManager::saveCredentials(const WifiCredentials& credentials) {
     if (restored) {
       Serial.println("wifi: nvs write failed, previous settings restored");
     } else if (removed) {
-      Serial.println("wifi: nvs write failed, old file removed (nvs keeps the old settings)");
+      Serial.println("wifi: nvs write failed, old file removed (nvs keeps its previous pair)");
     } else {
       Serial.println("wifi: nvs write failed, /wifi.json could not be restored or removed");
     }
@@ -366,7 +366,11 @@ bool WifiManager::clearCredentials() {
   // is left in place so the two stores keep telling the same story.
   const char* kUnusableConfig = "{\"version\":1}\n";
   bool fileOk = true;
-  if (ensureFileSystem(false)) {
+  if (!ensureFileSystem()) {
+    // Without the filesystem the file copy cannot be checked or removed.
+    Serial.println("wifi: littlefs unavailable, cannot confirm the network is cleared");
+    fileOk = false;
+  } else {
     if (LittleFS.exists(kWifiConfigTempPath) &&
         !LittleFS.remove(kWifiConfigTempPath) &&
         !writeRawFile(kWifiConfigTempPath, kUnusableConfig)) {
