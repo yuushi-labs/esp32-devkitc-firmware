@@ -266,16 +266,16 @@ void StationApp::updatePet(uint32_t nowMs) {
   }
 }
 
-void StationApp::setOledPower(bool on) {
+bool StationApp::setOledPower(bool on) {
   if (oledPower_ == on) {
-    return;
+    return true;
   }
   oledPower_ = on;
   if (displayReady_ && !display_.setPower(on)) {
     displayReady_ = false;
     frameSent_ = false;
     Serial.println("oled: power command failed, continuing without the panel");
-    return;
+    return false;
   }
   if (on) {
     // The panel kept its RAM, but the frame hash only describes frames this
@@ -284,6 +284,7 @@ void StationApp::setOledPower(bool on) {
   }
   dirty_ = true;
   Serial.printf("oled: display %s\n", on ? "on" : "off");
+  return true;
 }
 
 void StationApp::testClockChime() {
@@ -454,13 +455,28 @@ void StationApp::leaveMode(StationMode mode) {
   confirmLongFired_ = false;
 }
 
-void StationApp::handleInputs(const InputEvent& event, uint32_t nowMs) {
-  if (!oledPower_ && event.any()) {
+void StationApp::handleInputs(const InputEvent& rawEvent, uint32_t nowMs) {
+  if (!oledPower_ && rawEvent.any()) {
     // A dark panel wakes on any key or detent. The press that wakes it is
-    // swallowed so it cannot also change the screen by accident.
+    // swallowed so it cannot also change the screen by accident, and a button
+    // still held from that press must not turn into a long press later.
     setOledPower(true);
+    for (size_t index = 0; index < kInputButtonCount; ++index) {
+      const InputButton button = static_cast<InputButton>(index);
+      wakeSuppressedLongPress_[index] = inputs_.down(button);
+    }
     Serial.println("oled: on (input)");
     return;
+  }
+
+  InputEvent event = rawEvent;
+  for (size_t index = 0; index < kInputButtonCount; ++index) {
+    if (event.release[index]) {
+      wakeSuppressedLongPress_[index] = false;
+    }
+    if (wakeSuppressedLongPress_[index]) {
+      event.longPress[index] = false;
+    }
   }
 
   const bool push = event.press[static_cast<size_t>(InputButton::kPush)];
@@ -818,15 +834,16 @@ bool StationApp::handleOledCommand(const OledCommand& command) {
   if (!command.any()) {
     return true;
   }
+  bool powerOk = true;
   switch (command.power) {
     case OledPowerAction::kOn:
-      setOledPower(true);
+      powerOk = setOledPower(true);
       break;
     case OledPowerAction::kOff:
-      setOledPower(false);
+      powerOk = setOledPower(false);
       break;
     case OledPowerAction::kToggle:
-      setOledPower(!oledPower_);
+      powerOk = setOledPower(!oledPower_);
       break;
     case OledPowerAction::kNoChange:
       break;
@@ -879,9 +896,12 @@ bool StationApp::handleOledCommand(const OledCommand& command) {
     dirty_ = true;
   }
   if (command.testChime) {
+    // The chime is only visible on the pet screen, so bring it up first.
+    switchMode(StationMode::kPet);
     testClockChime();
   }
-  return true;
+  // A panel that refused DISPLAYON/DISPLAYOFF is reported as a failed request.
+  return powerOk;
 }
 
 size_t StationApp::buildStatusJson(char* out, size_t outSize) {

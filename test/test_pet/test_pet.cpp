@@ -113,8 +113,8 @@ void test_cat_walks_and_sits_on_a_cycle() {
   run(&pet, 3000, now, sensors);
   TEST_ASSERT_EQUAL_INT(static_cast<int>(PetActivity::kWalk),
                         static_cast<int>(pet.scene().activity));
-  // 18 px per second from the left edge: 8 + 30 after three seconds.
-  TEST_ASSERT_EQUAL_INT(VirtualPet::kWalkLeft + 30, pet.scene().spriteX);
+  // 18 px per second from the left edge: 8 + 54 after three seconds.
+  TEST_ASSERT_EQUAL_INT(VirtualPet::kWalkLeft + 54, pet.scene().spriteX);
 
   // Sitting starts at 10 s and stops the cat where the walk left it.
   runRange(&pet, 3100, 10400, now, sensors);
@@ -125,6 +125,24 @@ void test_cat_walks_and_sits_on_a_cycle() {
   TEST_ASSERT_EQUAL_INT(static_cast<int>(PetActivity::kSit),
                         static_cast<int>(pet.scene().activity));
   TEST_ASSERT_EQUAL_INT(sitting, pet.scene().spriteX);
+}
+
+void test_walk_speed_does_not_depend_on_the_update_interval() {
+  const SensorSnapshot sensors = comfortable();
+  const CivilTime now = civilAt(12, 30, 0);
+  int16_t positions[3] = {0, 0, 0};
+  const uint32_t steps[3] = {10, 100, 250};
+  for (size_t index = 0; index < 3; ++index) {
+    VirtualPet pet;
+    for (uint32_t t = 0; t <= 3000; t += steps[index]) {
+      pet.update(t, true, now, sensors);
+    }
+    positions[index] = pet.scene().spriteX;
+  }
+  // 18 px/s for three seconds is 54 px at every update rate.
+  TEST_ASSERT_EQUAL_INT(VirtualPet::kWalkLeft + 54, positions[0]);
+  TEST_ASSERT_EQUAL_INT(positions[0], positions[1]);
+  TEST_ASSERT_EQUAL_INT(positions[0], positions[2]);
 }
 
 void test_cat_stays_on_its_track() {
@@ -342,6 +360,7 @@ int main(int argc, char** argv) {
   RUN_TEST(test_mood_follows_the_sensors);
   RUN_TEST(test_mood_names_and_speech);
   RUN_TEST(test_cat_walks_and_sits_on_a_cycle);
+  RUN_TEST(test_walk_speed_does_not_depend_on_the_update_interval);
   RUN_TEST(test_cat_stays_on_its_track);
   RUN_TEST(test_blink_closes_the_eyes_for_a_moment);
   RUN_TEST(test_cat_sleeps_at_night);

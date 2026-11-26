@@ -57,8 +57,9 @@ class StationApp : public WebDashboardHost {
  private:
   void pollSensors(uint32_t nowMs);
   void updatePet(uint32_t nowMs);
-  // Hardware display on/off; on restores the current picture.
-  void setOledPower(bool on);
+  // Hardware display on/off; on restores the current picture. False when the
+  // panel refused the command.
+  bool setOledPower(bool on);
   bool oledPower() const { return oledPower_; }
   // Replays the hourly chime for a demo from the panel, serial or the web.
   void testClockChime();
@@ -118,6 +119,9 @@ class StationApp : public WebDashboardHost {
   uint8_t oledAddress_ = 0;
   bool displayReady_ = false;
   bool oledPower_ = true;
+  // Buttons that were already down when the panel woke: their long press must
+  // not reach a screen until the finger is lifted.
+  bool wakeSuppressedLongPress_[kInputButtonCount] = {false, false, false};
   bool dirty_ = true;
   bool confirmLongFired_ = false;
   bool confirmPressedInLogs_ = false;

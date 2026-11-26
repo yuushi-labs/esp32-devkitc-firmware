@@ -121,6 +121,7 @@ void VirtualPet::reset() {
   scene_ = PetScene();
   spriteX_ = kWalkLeft;
   direction_ = 1;
+  walkRemainder_ = 0;
   lastUpdateMs_ = 0;
   chimeUntilMs_ = 0;
   chimeActive_ = false;
@@ -169,21 +170,24 @@ void VirtualPet::moveSprite(uint32_t elapsedMs, bool walking) {
   if (!walking || elapsedMs == 0) {
     return;
   }
-  int32_t x = spriteX_ + direction_ *
-                             static_cast<int32_t>(kWalkPixelsPerSecond *
-                                                  elapsedMs / 1000);
-  // A step shorter than a millisecond would otherwise leave the cat standing.
-  if (x == spriteX_) {
-    x = spriteX_ + direction_;
+  // The fraction of a pixel is carried to the next update, so 18 px/s holds
+  // whether loop() calls update() every 10 ms or every 250 ms.
+  walkRemainder_ += static_cast<int32_t>(kWalkPixelsPerSecond) *
+                    static_cast<int32_t>(elapsedMs);
+  const int32_t whole = walkRemainder_ / 1000;
+  walkRemainder_ -= whole * 1000;
+  if (whole == 0) {
+    return;
   }
-  if (x >= kWalkRight) {
-    x = kWalkRight;
+  int32_t position = spriteX_ + (direction_ * whole);
+  if (position >= kWalkRight) {
+    position = kWalkRight;
     direction_ = -1;
-  } else if (x <= kWalkLeft) {
-    x = kWalkLeft;
+  } else if (position <= kWalkLeft) {
+    position = kWalkLeft;
     direction_ = 1;
   }
-  spriteX_ = static_cast<int16_t>(x);
+  spriteX_ = static_cast<int16_t>(position);
 }
 
 void VirtualPet::update(uint32_t nowMs, bool timeSynced, const CivilTime& now,

@@ -126,6 +126,9 @@ class VirtualPet {
 
   PetScene scene_;
   int16_t spriteX_ = kWalkLeft;
+  // Leftover fraction of a pixel (in 1/1000 px), so the walk speed does not
+  // depend on how often update() is called.
+  int32_t walkRemainder_ = 0;
   int8_t direction_ = 1;
   uint32_t lastUpdateMs_ = 0;
   uint32_t chimeUntilMs_ = 0;

@@ -323,8 +323,9 @@ void test_power_off_sends_display_off_and_stops_flushing() {
   TEST_ASSERT_TRUE(display.power());
   const std::vector<uint8_t>& on = bus.writeLog.back();
   TEST_ASSERT_EQUAL_UINT8(0xAF, on[1]);
+  const uint32_t beforeFlush = bus.writeCount;
   TEST_ASSERT_TRUE(display.flush());
-  TEST_ASSERT_TRUE(bus.writeCount > writes);
+  TEST_ASSERT_TRUE(bus.writeCount > beforeFlush);
 }
 
 void test_power_commands_need_a_working_panel() {
