@@ -329,11 +329,11 @@ bool WifiManager::saveCredentials(const WifiCredentials& credentials) {
       removed = !LittleFS.exists(kWifiConfigPath) || LittleFS.remove(kWifiConfigPath);
     }
     if (restored) {
-      Serial.println("wifi: nvs write failed, previous settings restored");
+      Serial.println("wifi: nvs write failed; previous file restored (nvs pair not confirmed)");
     } else if (removed) {
-      Serial.println("wifi: nvs write failed, old file removed (nvs keeps its previous pair)");
+      Serial.println("wifi: nvs write failed; old file removed (nvs pair not confirmed)");
     } else {
-      Serial.println("wifi: nvs write failed, /wifi.json could not be restored or removed");
+      Serial.println("wifi: nvs write failed; /wifi.json could not be restored or removed");
     }
     return false;
   }
