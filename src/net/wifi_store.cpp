@@ -329,12 +329,21 @@ class Parser {
 
   // Skips a value whose content this version does not use, keeping balanced
   // objects and arrays intact so a future key cannot break the parser.
+  bool literalBoundary() const {
+    const char c = *cursor_;
+    return c == '\0' || isSpace(c) || c == ',' || c == '}' || c == ']';
+  }
+
   bool skipNumber() {
     const char* start = cursor_;
     if (*cursor_ == '-') {
       ++cursor_;
     }
     if (*cursor_ < '0' || *cursor_ > '9') {
+      return false;
+    }
+    if (*cursor_ == '0' && cursor_[1] >= '0' && cursor_[1] <= '9') {
+      // JSON forbids a leading zero ("01").
       return false;
     }
     while (*cursor_ >= '0' && *cursor_ <= '9') {
@@ -361,7 +370,7 @@ class Parser {
         ++cursor_;
       }
     }
-    return cursor_ != start;
+    return cursor_ != start && literalBoundary();
   }
 
   bool skipLiteral(const char* literal) {
@@ -370,49 +379,78 @@ class Parser {
       return false;
     }
     cursor_ += length;
-    return true;
+    return literalBoundary();
   }
 
   // Skips a value whose content this version does not use, following the JSON
-  // grammar: strings, numbers, true/false/null and nested objects/arrays with
-  // matching brackets. An empty value or a stray token is rejected.
-  bool skipValue() {
+  // grammar all the way down: strings (escapes validated), numbers (no leading
+  // zero), true/false/null and nested objects/arrays. A stray token or an empty
+  // value is rejected, so a broken file is never preferred over NVS.
+  bool skipValue(int depth = 0) {
+    if (depth > 8) {
+      return false;
+    }
     skipSpace();
     if (*cursor_ == '"') {
-      return skipString();
+      char scratch[8];
+      bool truncated = false;
+      return parseString(scratch, sizeof(scratch), WifiValidation::kSsidTooLong,
+                         nullptr, true, &truncated);
     }
-    if (*cursor_ == '{' || *cursor_ == '[') {
-      char expected[8] = {0};
-      int depth = 0;
-      while (*cursor_ != '\0') {
-        if (*cursor_ == '"') {
-          if (!skipString()) {
-            return false;
-          }
-          continue;
-        }
-        if (*cursor_ == '{' || *cursor_ == '[') {
-          if (depth >= static_cast<int>(sizeof(expected))) {
-            return false;
-          }
-          expected[depth++] = *cursor_ == '{' ? '}' : ']';
-          ++cursor_;
-          continue;
-        }
-        if (*cursor_ == '}' || *cursor_ == ']') {
-          if (depth == 0 || expected[depth - 1] != *cursor_) {
-            return false;
-          }
-          --depth;
-          ++cursor_;
-          if (depth == 0) {
-            return true;
-          }
-          continue;
-        }
+    if (*cursor_ == '{') {
+      ++cursor_;
+      skipSpace();
+      if (*cursor_ == '}') {
         ++cursor_;
+        return true;
       }
-      return false;
+      while (true) {
+        char key[8];
+        bool truncated = false;
+        if (!parseString(key, sizeof(key), WifiValidation::kSsidTooLong, nullptr,
+                         true, &truncated)) {
+          return false;
+        }
+        if (!consume(':')) {
+          return false;
+        }
+        if (!skipValue(depth + 1)) {
+          return false;
+        }
+        skipSpace();
+        if (*cursor_ == ',') {
+          ++cursor_;
+          continue;
+        }
+        if (*cursor_ == '}') {
+          ++cursor_;
+          return true;
+        }
+        return false;
+      }
+    }
+    if (*cursor_ == '[') {
+      ++cursor_;
+      skipSpace();
+      if (*cursor_ == ']') {
+        ++cursor_;
+        return true;
+      }
+      while (true) {
+        if (!skipValue(depth + 1)) {
+          return false;
+        }
+        skipSpace();
+        if (*cursor_ == ',') {
+          ++cursor_;
+          continue;
+        }
+        if (*cursor_ == ']') {
+          ++cursor_;
+          return true;
+        }
+        return false;
+      }
     }
     if (skipLiteral("true") || skipLiteral("false") || skipLiteral("null")) {
       return true;

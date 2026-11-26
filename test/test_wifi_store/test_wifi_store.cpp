@@ -175,6 +175,21 @@ void test_unknown_values_must_still_be_json() {
   TEST_ASSERT_FALSE(parseWifiConfigJson(
       "{\"ssid\":\"Home\",\"password\":\"12345678\",\"extra\":01x}",
       &parsed));
+  // Inside an array too: a bare word is not a value.
+  TEST_ASSERT_FALSE(parseWifiConfigJson(
+      "{\"ssid\":\"Home\",\"password\":\"12345678\",\"extra\":[garbage]}",
+      &parsed));
+  // A leading zero is not a JSON number.
+  TEST_ASSERT_FALSE(parseWifiConfigJson(
+      "{\"ssid\":\"Home\",\"password\":\"12345678\",\"extra\":01}",
+      &parsed));
+  // Unknown string values still have to use valid escapes.
+  TEST_ASSERT_FALSE(parseWifiConfigJson(
+      "{\"ssid\":\"Home\",\"password\":\"12345678\",\"extra\":\"\\q\"}",
+      &parsed));
+  TEST_ASSERT_TRUE(parseWifiConfigJson(
+      "{\"ssid\":\"Home\",\"password\":\"12345678\",\"extra\":\"a \\u00E9\"}",
+      &parsed));
 }
 
 void test_config_json_rejects_overflowed_versions_and_empty_values() {

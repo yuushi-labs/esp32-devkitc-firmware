@@ -303,39 +303,41 @@ bool WifiManager::saveCredentials(const WifiCredentials& credentials) {
   }
 
   const bool fsReady = littlefsReady_ || ensureFileSystem(true);
-  if (fsReady) {
-    char previous[kWifiConfigMaxBytes] = {0};
-    const bool hadFile = readFileInto(kWifiConfigPath, previous, sizeof(previous));
-
-    // /wifi.json is the copy the next boot prefers, so the save only succeeds
-    // when the new pair is really in it. Reporting success with an older file
-    // left behind would reconnect to the old network after a reset.
-    if (!writeConfigFile(json)) {
-      Serial.println("wifi: could not write /wifi.json, save failed");
-      return false;
-    }
-    if (!writeNvsConfig(credentials)) {
-      // Keep the two stores on the pair the user had before this attempt. If
-      // the old pair cannot be written back, the new file is removed so the
-      // (unchanged) NVS copy is what a reset finds; a removal that fails too is
-      // reported, never silently accepted.
-      if (!restoreConfigFile(previous, hadFile) &&
-          !LittleFS.remove(kWifiConfigPath)) {
-        Serial.println("wifi: could not restore or remove /wifi.json");
-      }
-      Serial.println("wifi: nvs write failed, previous settings restored");
-      return false;
-    }
-    configSource_ = WifiConfigSource::kLittleFs;
-  } else {
-    // LittleFS is not usable at all (no file can exist on it), so NVS is the
-    // only store; the next boot will find no file and use NVS.
-    if (!writeNvsConfig(credentials)) {
-      return false;
-    }
-    configSource_ = WifiConfigSource::kNvs;
-    Serial.println("wifi: littlefs unavailable, saved in nvs only");
+  if (!fsReady) {
+    // Without LittleFS neither the old file nor the new one can be checked.
+    // Writing only to NVS would be undone by a /wifi.json that a later mount
+    // finds, so this save fails instead of reporting success.
+    Serial.println("wifi: littlefs unavailable, cannot save the network");
+    return false;
   }
+
+  char previous[kWifiConfigMaxBytes] = {0};
+  const bool hadFile = readFileInto(kWifiConfigPath, previous, sizeof(previous));
+
+  // /wifi.json is the copy the next boot prefers, so the save only succeeds
+  // when the new pair is really in it. Reporting success with an older file
+  // left behind would reconnect to the old network after a reset.
+  if (!writeConfigFile(json)) {
+    Serial.println("wifi: could not write /wifi.json, save failed");
+    return false;
+  }
+  if (!writeNvsConfig(credentials)) {
+    // Keep the two stores on the pair the user had before this attempt.
+    const bool restored = restoreConfigFile(previous, hadFile);
+    bool removed = false;
+    if (!restored) {
+      removed = !LittleFS.exists(kWifiConfigPath) || LittleFS.remove(kWifiConfigPath);
+    }
+    if (restored) {
+      Serial.println("wifi: nvs write failed, previous settings restored");
+    } else if (removed) {
+      Serial.println("wifi: nvs write failed, old file removed (nvs keeps the old settings)");
+    } else {
+      Serial.println("wifi: nvs write failed, /wifi.json could not be restored or removed");
+    }
+    return false;
+  }
+  configSource_ = WifiConfigSource::kLittleFs;
 
   credentials_ = credentials;
   startStation();
