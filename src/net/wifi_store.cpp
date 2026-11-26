@@ -230,6 +230,45 @@ class Parser {
     return false;
   }
 
+  // Reads an object key. A key that does not fit is reported as truncated
+  // instead of failing the file: an unknown future key must not make the
+  // stored network unreadable.
+  bool parseKey(char* out, size_t outSize, bool* truncated) {
+    if (truncated != nullptr) {
+      *truncated = false;
+    }
+    skipSpace();
+    if (*cursor_ != '"') {
+      return false;
+    }
+    ++cursor_;
+    size_t written = 0;
+    while (*cursor_ != '\0') {
+      char c = *cursor_;
+      if (c == '\\') {
+        ++cursor_;
+        if (*cursor_ == '\0') {
+          return false;
+        }
+        c = *cursor_;
+      } else if (c == '"') {
+        ++cursor_;
+        if (out != nullptr && outSize > 0) {
+          out[written < outSize ? written : outSize - 1] = '\0';
+        }
+        return true;
+      }
+      if (out != nullptr && written + 1 < outSize) {
+        out[written] = c;
+      } else if (truncated != nullptr) {
+        *truncated = true;
+      }
+      ++written;
+      ++cursor_;
+    }
+    return false;
+  }
+
   // Moves past a string without storing it (unknown keys).
   bool skipString() {
     skipSpace();
@@ -367,25 +406,26 @@ bool parseWifiConfigJson(const char* text, WifiCredentials* out,
     return false;
   }
   while (true) {
-    char key[16] = {0};
-    if (!parser.parseString(key, sizeof(key), WifiValidation::kSsidTooLong, error)) {
+    char key[24] = {0};
+    bool unknownKey = false;
+    if (!parser.parseKey(key, sizeof(key), &unknownKey)) {
       return false;
     }
     if (!parser.consume(':')) {
       return false;
     }
-    if (std::strcmp(key, "ssid") == 0) {
+    if (!unknownKey && std::strcmp(key, "ssid") == 0) {
       if (!parser.parseString(ssid, sizeof(ssid), WifiValidation::kSsidTooLong,
                               error)) {
         return false;
       }
       ssidFound = true;
-    } else if (std::strcmp(key, "password") == 0) {
+    } else if (!unknownKey && std::strcmp(key, "password") == 0) {
       if (!parser.parseString(password, sizeof(password),
                               WifiValidation::kPasswordTooLong, error)) {
         return false;
       }
-    } else if (std::strcmp(key, "version") == 0) {
+    } else if (!unknownKey && std::strcmp(key, "version") == 0) {
       uint32_t version = 0;
       if (!parser.parseUnsigned(&version) || version != kWifiConfigVersion) {
         return false;

@@ -81,6 +81,13 @@ void test_config_json_accepts_any_key_order_and_unknown_keys() {
   // No version is fine too: an older file without it is still usable.
   TEST_ASSERT_TRUE(parseWifiConfigJson("{\"ssid\":\"Home\",\"password\":\"12345678\"}",
                                        &parsed));
+
+  // A key longer than the key buffer is an unknown key, not a broken file.
+  TEST_ASSERT_TRUE(parseWifiConfigJson(
+      "{\"an_unknown_key_that_is_long\":{\"nested\":[1,2]},"
+      "\"ssid\":\"Home\",\"password\":\"12345678\"}",
+      &parsed));
+  TEST_ASSERT_EQUAL_STRING("Home", parsed.ssid);
 }
 
 void test_config_json_rejects_broken_files() {

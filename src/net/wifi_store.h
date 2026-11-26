@@ -20,7 +20,6 @@ constexpr const char* kWifiConfigPath = "/wifi.json";
 // Written first and renamed over the real file, so a power cut during a save
 // leaves the previous /wifi.json in place.
 constexpr const char* kWifiConfigTempPath = "/wifi.json.tmp";
-constexpr const char* kWifiConfigVersionKey = "version";
 constexpr uint32_t kWifiConfigVersion = 1;
 // Worst case escape of a 32 byte SSID and a 63 byte password plus the keys.
 constexpr size_t kWifiConfigMaxBytes = 768;
