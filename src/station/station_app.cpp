@@ -746,15 +746,13 @@ void StationApp::printTimerStatus() {
 }
 
 void StationApp::printOledStatus() {
-  Serial.printf("oled: display=%s panel=%s address=%s\n", oledPower_ ? "on" : "off",
-                displayReady_ ? "ready" : "missing",
-                oledAddress_ != 0 ? "0x3C/0x3D" : "none");
+  Serial.printf("oled: display=%s panel=%s\n", oledPower_ ? "on" : "off",
+                displayReady_ ? "ready" : "missing");
   if (oledAddress_ != 0) {
-    Serial.printf("  address=0x%02X mode=%s\n", static_cast<unsigned>(oledAddress_),
-                  controller_.screen() == StationScreen::kMenu
-                      ? "menu"
-                      : stationModeName(controller_.mode()));
+    Serial.printf("  address=0x%02X\n", static_cast<unsigned>(oledAddress_));
   }
+  Serial.printf("  screen=%s mode=%s\n", stationScreenName(controller_.screen()),
+                stationModeName(controller_.mode()));
 }
 
 void StationApp::printPetStatus() {

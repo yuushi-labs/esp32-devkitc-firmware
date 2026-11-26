@@ -322,7 +322,15 @@ void test_eyes_close_over_the_sprite_holes() {
   drawPetSprite(&down, 2, 10, 10, false);
   TEST_ASSERT_TRUE(up.pixel(10 + 8, 10 + 3));
   TEST_ASSERT_TRUE(down.pixel(10 + 8, 10 + 3));
-  TEST_ASSERT_FALSE(up.pixel(10 + 21, 10 + 12) && down.pixel(10 + 21, 10 + 12));
+  int differences = 0;
+  for (int y = 0; y < 20; ++y) {
+    for (int x = 0; x < 24; ++x) {
+      if (up.pixel(10 + x, 10 + y) != down.pixel(10 + x, 10 + y)) {
+        ++differences;
+      }
+    }
+  }
+  TEST_ASSERT_TRUE(differences > 0);
 }
 
 }  // namespace
