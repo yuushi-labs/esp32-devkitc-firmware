@@ -24,6 +24,8 @@ struct DashboardState {
   int8_t rssi = 0;
   bool ntpSynced = false;
   char timestamp[20] = {0};
+  // Where the saved network lives (littlefs / nvs / none).
+  const char* wifiStorage = "none";
 
   bool logStorageReady = false;
   bool loggingEnabled = false;

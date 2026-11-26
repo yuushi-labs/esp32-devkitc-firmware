@@ -152,6 +152,8 @@ void test_wifi_status_report_formats_local_time() {
   status.rssi = -55;
   status.epochSeconds = 1700000000;
   status.utcOffsetSeconds = 9 * 3600;
+  status.storage = "littlefs";
+  status.storagePath = "/wifi.json";
 
   char out[320];
   formatWifiStatus(status, out, sizeof(out));
@@ -160,6 +162,20 @@ void test_wifi_status_report_formats_local_time() {
   TEST_ASSERT_NOT_NULL(std::strstr(out, "ip: 192.168.1.42"));
   TEST_ASSERT_NOT_NULL(std::strstr(out, "rssi: -55 dBm"));
   TEST_ASSERT_NOT_NULL(std::strstr(out, "ntp: 2023-11-15 07:13:20"));
+  TEST_ASSERT_NOT_NULL(std::strstr(out, "saved: littlefs (/wifi.json)"));
+}
+
+void test_wifi_status_names_the_nvs_fallback() {
+  WifiStatus status;
+  status.mode = WifiMode::kStation;
+  status.storage = "nvs";
+  char out[320];
+  formatWifiStatus(status, out, sizeof(out));
+  TEST_ASSERT_NOT_NULL(std::strstr(out, "saved: nvs"));
+
+  status.storage = "none";
+  formatWifiStatus(status, out, sizeof(out));
+  TEST_ASSERT_NOT_NULL(std::strstr(out, "saved: none"));
 }
 
 void test_station_url() {
@@ -325,6 +341,7 @@ DashboardState fullState() {
   std::snprintf(state.ip, sizeof(state.ip), "192.168.1.42");
   state.rssi = -55;
   state.ntpSynced = true;
+  state.wifiStorage = "littlefs";
   std::snprintf(state.timestamp, sizeof(state.timestamp), "2026-11-25 07:37:00");
   state.logStorageReady = true;
   state.loggingEnabled = true;
@@ -369,6 +386,7 @@ void test_status_json_contains_every_section() {
   TEST_ASSERT_NOT_NULL(std::strstr(out, "\"ip\":\"192.168.1.42\""));
   TEST_ASSERT_NOT_NULL(std::strstr(out, "\"rssi\":-55"));
   TEST_ASSERT_NOT_NULL(std::strstr(out, "\"ntp\":true"));
+  TEST_ASSERT_NOT_NULL(std::strstr(out, "\"storage\":\"littlefs\""));
   TEST_ASSERT_NOT_NULL(std::strstr(out, "\"time\":\"2026-11-25 07:37:00\""));
   TEST_ASSERT_NOT_NULL(std::strstr(out, "\"temperature\":23.40"));
   TEST_ASSERT_NOT_NULL(std::strstr(out, "\"humidity\":45.00"));
@@ -647,6 +665,7 @@ int main(int argc, char** argv) {
   RUN_TEST(test_setup_form_rejects_values_that_do_not_fit);
   RUN_TEST(test_setup_form_rejects_an_embedded_nul);
   RUN_TEST(test_wifi_status_report_formats_local_time);
+  RUN_TEST(test_wifi_status_names_the_nvs_fallback);
   RUN_TEST(test_station_url);
   RUN_TEST(test_dashboard_url_covers_station_and_setup_ap);
   RUN_TEST(test_setup_token_is_reused_while_it_is_valid);

@@ -11,9 +11,10 @@ namespace fw {
 void drawPetScreen(const PetScene& scene, Framebuffer* out);
 
 // One sprite frame at (x, y) with the eyes either open (the bitmap holes) or
-// closed (a lit line over the holes). Exposed for the unit tests.
+// closed (a lit line over the holes), and the pupils shifted by `gaze` while
+// the cat looks around. Exposed for the unit tests.
 void drawPetSprite(Framebuffer* out, uint8_t tailFrame, int x, int y,
-                   bool eyesClosed);
+                   bool eyesClosed, int8_t gaze = 0);
 
 // A 16x16 clock face, used inside the chime bubble.
 void drawPetClock(Framebuffer* out, int x, int y);

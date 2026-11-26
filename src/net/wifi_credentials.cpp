@@ -218,16 +218,21 @@ size_t formatWifiStatus(const WifiStatus& status, char* out, size_t outSize) {
     formatTimestamp(status.epochSeconds, status.utcOffsetSeconds, timestamp,
                     sizeof(timestamp));
   }
+  char savedPath[24] = {0};
+  if (status.storagePath[0] != '\0') {
+    std::snprintf(savedPath, sizeof(savedPath), " (%s)", status.storagePath);
+  }
   const int needed = formatInto(
       out, outSize,
       "wifi: %s%s\n"
       "  ssid: %s\n"
       "  ip: %s\n"
       "  rssi: %d dBm\n"
-      "  ntp: %s\n",
+      "  ntp: %s\n"
+      "  saved: %s%s\n",
       wifiModeName(status.mode), status.connected ? " (connected)" : " (not connected)",
       status.ssid[0] != '\0' ? status.ssid : "-", status.ip,
-      static_cast<int>(status.rssi), timestamp);
+      static_cast<int>(status.rssi), timestamp, status.storage, savedPath);
   return needed > 0 ? static_cast<size_t>(needed) : 0;
 }
 

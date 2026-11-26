@@ -1,5 +1,6 @@
 #include "hal/wifi_manager.h"
 
+#include <LittleFS.h>
 #include <Preferences.h>
 #include <esp_random.h>
 #include <time.h>
@@ -26,6 +27,15 @@ void copyString(char* out, size_t outSize, const char* value) {
   std::snprintf(out, outSize, "%s", value != nullptr ? value : "");
 }
 
+// Mounts LittleFS, formatting a brand new board when `format` is set. The log
+// recorder usually mounts it first; this keeps the Wi-Fi store independent.
+bool ensureFileSystem(bool format) {
+  if (LittleFS.begin(false)) {
+    return true;
+  }
+  return format && LittleFS.begin(true);
+}
+
 // Puts a key back exactly as it was, or removes it when it did not exist: a
 // failed write must not leave a new SSID next to an old password.
 void restoreKey(Preferences& preferences, const char* key, const String& previous) {
@@ -39,8 +49,30 @@ void restoreKey(Preferences& preferences, const char* key, const String& previou
 }  // namespace
 
 void WifiManager::begin() {
+  littlefsReady_ = ensureFileSystem(true);
+
   WifiCredentials stored;
-  if (loadCredentials(&stored) && stored.valid) {
+  WifiConfigSource source = WifiConfigSource::kNone;
+  bool migrate = false;
+  const bool haveStored = loadStored(&stored, &source, &migrate);
+  configSource_ = source;
+
+  if (migrate && stored.valid) {
+    // v0.4.0 and older saved the pair in NVS only. Copy it to /wifi.json once
+    // so every later boot reads the file.
+    char json[kWifiConfigMaxBytes];
+    const size_t needed = formatWifiConfigJson(stored, json, sizeof(json));
+    if (needed > 0 && needed < sizeof(json) && writeConfigFile(json)) {
+      configSource_ = WifiConfigSource::kLittleFs;
+      Serial.printf("wifi: migrated the saved network from nvs to %s\n",
+                    kWifiConfigPath);
+    } else {
+      Serial.println(
+          "wifi: could not write the saved network to littlefs (keeping nvs)");
+    }
+  }
+
+  if (haveStored && stored.valid) {
     credentials_ = stored;
     startStation();
   } else {
@@ -48,26 +80,131 @@ void WifiManager::begin() {
   }
 }
 
+bool WifiManager::loadStored(WifiCredentials* out, WifiConfigSource* source,
+                             bool* migrate) const {
+  if (out != nullptr) {
+    *out = WifiCredentials{};
+  }
+  char text[kWifiConfigMaxBytes] = {0};
+  const bool fileRead = readConfigFile(text, sizeof(text));
+
+  char nvsSsid[kWifiSsidMaxLength + 1] = {0};
+  char nvsPassword[kWifiPasswordMaxLength + 1] = {0};
+  const bool nvsPresent =
+      readNvsConfig(nvsSsid, sizeof(nvsSsid), nvsPassword, sizeof(nvsPassword));
+
+  const WifiConfigChoice choice =
+      chooseWifiConfig(fileRead && text[0] != '\0' ? text : nullptr, nvsPresent,
+                       nvsSsid, nvsPassword);
+  if (choice.fileRejected) {
+    Serial.println("wifi: /wifi.json could not be read, ignoring it");
+  }
+  if (out != nullptr) {
+    *out = choice.credentials;
+  }
+  if (source != nullptr) {
+    *source = choice.source;
+  }
+  if (migrate != nullptr) {
+    *migrate = choice.migrate;
+  }
+  return choice.credentials.valid;
+}
+
 bool WifiManager::loadCredentials(WifiCredentials* out) const {
   if (out == nullptr) {
     return false;
   }
-  *out = WifiCredentials{};
+  return loadStored(out, nullptr, nullptr);
+}
+
+bool WifiManager::readConfigFile(char* out, size_t outSize) const {
+  if (out == nullptr || outSize == 0) {
+    return false;
+  }
+  out[0] = '\0';
+  if (!ensureFileSystem(false)) {
+    return false;
+  }
+  File file = LittleFS.open(kWifiConfigPath, FILE_READ);
+  if (!file) {
+    return false;
+  }
+  const size_t read = file.readBytes(out, outSize - 1);
+  file.close();
+  out[read] = '\0';
+  return read > 0;
+}
+
+bool WifiManager::writeConfigFile(const char* text) {
+  if (text == nullptr) {
+    return false;
+  }
+  if (!ensureFileSystem(true)) {
+    return false;
+  }
+  // Write a temporary file first: a reset in the middle of a save leaves the
+  // previous /wifi.json untouched instead of a half written one.
+  File file = LittleFS.open(kWifiConfigTempPath, FILE_WRITE);
+  if (!file) {
+    littlefsReady_ = false;
+    return false;
+  }
+  const size_t written = file.print(text);
+  file.close();
+  if (written != std::strlen(text)) {
+    LittleFS.remove(kWifiConfigTempPath);
+    return false;
+  }
+  // LittleFS refuses to rename onto an existing name, so the old file goes
+  // after the new one is complete on flash.
+  if (LittleFS.exists(kWifiConfigPath)) {
+    LittleFS.remove(kWifiConfigPath);
+  }
+  if (!LittleFS.rename(kWifiConfigTempPath, kWifiConfigPath)) {
+    LittleFS.remove(kWifiConfigTempPath);
+    return false;
+  }
+  littlefsReady_ = true;
+  return true;
+}
+
+void WifiManager::restoreConfigFile(const char* previous, bool hadFile) {
+  if (!ensureFileSystem(false)) {
+    return;
+  }
+  if (!hadFile || previous == nullptr || previous[0] == '\0') {
+    LittleFS.remove(kWifiConfigPath);
+    return;
+  }
+  writeConfigFile(previous);
+}
+
+bool WifiManager::readNvsConfig(char* ssid, size_t ssidSize, char* password,
+                                size_t passwordSize) const {
+  if (ssid == nullptr || password == nullptr) {
+    return false;
+  }
+  ssid[0] = '\0';
+  password[0] = '\0';
   Preferences preferences;
   if (!preferences.begin(kPreferencesNamespace, true)) {
     return false;
   }
-  const String ssid = preferences.getString(kSsidKey, "");
-  const String password = preferences.getString(kPasswordKey, "");
+  const bool present = preferences.isKey(kSsidKey);
+  const String storedSsid = present ? preferences.getString(kSsidKey, "") : String();
+  const String storedPassword =
+      present ? preferences.getString(kPasswordKey, "") : String();
   preferences.end();
-  return makeWifiCredentials(ssid.c_str(), password.c_str(), out) ==
-         WifiValidation::kOk;
-}
-
-bool WifiManager::saveCredentials(const WifiCredentials& credentials) {
-  if (!credentials.valid) {
+  if (!present) {
     return false;
   }
+  copyString(ssid, ssidSize, storedSsid.c_str());
+  copyString(password, passwordSize, storedPassword.c_str());
+  return true;
+}
+
+bool WifiManager::writeNvsConfig(const WifiCredentials& credentials) {
   Preferences preferences;
   if (!preferences.begin(kPreferencesNamespace, false)) {
     return false;
@@ -86,9 +223,39 @@ bool WifiManager::saveCredentials(const WifiCredentials& credentials) {
     restoreKey(preferences, kPasswordKey, previousPassword);
   }
   preferences.end();
-  if (!ok) {
+  return ok;
+}
+
+bool WifiManager::saveCredentials(const WifiCredentials& credentials) {
+  if (!credentials.valid) {
     return false;
   }
+  char json[kWifiConfigMaxBytes];
+  const size_t needed = formatWifiConfigJson(credentials, json, sizeof(json));
+  if (needed == 0 || needed >= sizeof(json)) {
+    return false;
+  }
+
+  char previous[kWifiConfigMaxBytes] = {0};
+  const bool hadFile = readConfigFile(previous, sizeof(previous));
+  const bool fileOk = writeConfigFile(json);
+  const bool nvsOk = writeNvsConfig(credentials);
+
+  if (!nvsOk) {
+    // NVS is the fallback that always exists; when it refused the new pair,
+    // the file must go back to what it held so the two do not disagree.
+    if (fileOk) {
+      restoreConfigFile(previous, hadFile);
+    }
+    return false;
+  }
+  if (fileOk) {
+    configSource_ = WifiConfigSource::kLittleFs;
+  } else {
+    configSource_ = WifiConfigSource::kNvs;
+    Serial.println("wifi: littlefs write failed, saved in nvs only");
+  }
+
   credentials_ = credentials;
   startStation();
   return true;
@@ -101,6 +268,11 @@ void WifiManager::clearCredentials() {
     preferences.remove(kPasswordKey);
     preferences.end();
   }
+  if (ensureFileSystem(false)) {
+    LittleFS.remove(kWifiConfigPath);
+    LittleFS.remove(kWifiConfigTempPath);
+  }
+  configSource_ = WifiConfigSource::kNone;
   credentials_ = WifiCredentials{};
   startAccessPoint();
 }
@@ -154,7 +326,8 @@ void WifiManager::startStation() {
   wasConnected_ = false;
   scanning_ = false;
   updateIp();
-  Serial.printf("wifi: connecting to '%s'\n", credentials_.ssid);
+  Serial.printf("wifi: connecting to '%s' (saved in %s)\n", credentials_.ssid,
+                wifiConfigSourceName(configSource_));
 }
 
 void WifiManager::startNtp() {

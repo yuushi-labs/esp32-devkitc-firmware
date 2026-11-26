@@ -5,7 +5,7 @@
 #include <cstdint>
 
 #ifndef FW_VERSION
-#define FW_VERSION "0.4.0"
+#define FW_VERSION "0.4.1"
 #endif
 
 #ifndef FW_BOARD

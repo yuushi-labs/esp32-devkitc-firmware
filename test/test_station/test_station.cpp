@@ -535,6 +535,91 @@ void test_graph_screen_without_samples_says_so() {
   TEST_ASSERT_TRUE(dark > 0);
 }
 
+
+void test_wifi_qr_closes_before_leaving_the_mode() {
+  // The v0.4.0 report: 4 WIFI & WEB -> CON (QR) -> BAK -> 4 again and the page
+  // could never leave the QR. The overlay now resets on every entry and closes
+  // on the first BAK.
+  StationController controller;
+  WifiQrState qr;
+
+  TEST_ASSERT_TRUE(controller.selectMode(StationMode::kWifi));
+  qr.enterMode();
+  TEST_ASSERT_FALSE(qr.visible());
+
+  qr.show();
+  TEST_ASSERT_TRUE(qr.visible());
+
+  // First BAK: the code closes and the Wi-Fi status page stays up.
+  TEST_ASSERT_TRUE(qr.closeOnBack());
+  TEST_ASSERT_FALSE(qr.visible());
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(StationScreen::kMode),
+                        static_cast<int>(controller.screen()));
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(StationMode::kWifi),
+                        static_cast<int>(controller.mode()));
+
+  // Second BAK: the menu opens with the Wi-Fi entry selected.
+  TEST_ASSERT_FALSE(qr.closeOnBack());
+  qr.leaveMode();
+  TEST_ASSERT_TRUE(controller.back());
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(StationScreen::kMenu),
+                        static_cast<int>(controller.screen()));
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(StationMode::kWifi),
+                        static_cast<int>(controller.menuSelection()));
+
+  // Re-entering shows the status page, not the old code.
+  TEST_ASSERT_TRUE(controller.enter());
+  qr.enterMode();
+  TEST_ASSERT_FALSE(qr.visible());
+  TEST_ASSERT_FALSE(qr.closeOnBack());
+
+  StationView view = healthyView();
+  view.wifiMode = WifiMode::kStation;
+  view.wifiConnected = true;
+  std::snprintf(view.wifiSsid, sizeof(view.wifiSsid), "Home");
+  std::snprintf(view.ip, sizeof(view.ip), "192.168.1.42");
+  view.qrVisible = qr.visible();
+  PageLines page;
+  buildStationPage(StationMode::kWifi, view, &page);
+  TEST_ASSERT_EQUAL_STRING("WIFI STATION", page.lines[0].text);
+  TEST_ASSERT_TRUE(pageHas(page, "CON show QR"));
+  TEST_ASSERT_TRUE(pageHas(page, "PSH AP/STA  BAK back"));
+}
+
+void test_wifi_qr_resets_on_entry_exit_and_mode_switch() {
+  WifiQrState qr;
+  // Leaving the mode hides the code even when no BAK was pressed there.
+  qr.show();
+  qr.leaveMode();
+  TEST_ASSERT_FALSE(qr.visible());
+
+  // Entering the mode again always starts on the status page.
+  qr.show();
+  qr.enterMode();
+  TEST_ASSERT_FALSE(qr.visible());
+
+  // PSH (setup AP <-> station) shows the status page of the new mode.
+  qr.show();
+  qr.onModeSwitch();
+  TEST_ASSERT_FALSE(qr.visible());
+
+  // hide() is what the 60 second timeout uses.
+  qr.show();
+  qr.hide();
+  TEST_ASSERT_FALSE(qr.visible());
+  TEST_ASSERT_FALSE(qr.closeOnBack());
+}
+
+void test_wifi_qr_shows_only_while_it_is_up() {
+  WifiQrState qr;
+  TEST_ASSERT_FALSE(qr.visible());
+  qr.enterMode();
+  qr.show();
+  TEST_ASSERT_TRUE(qr.visible());
+  TEST_ASSERT_TRUE(qr.closeOnBack());
+  TEST_ASSERT_FALSE(qr.visible());
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -552,6 +637,9 @@ int main(int argc, char** argv) {
   RUN_TEST(test_environment_detail_shows_trend_and_comfort);
   RUN_TEST(test_logs_page_reports_ntp_and_file);
   RUN_TEST(test_wifi_page_station_and_setup);
+  RUN_TEST(test_wifi_qr_closes_before_leaving_the_mode);
+  RUN_TEST(test_wifi_qr_resets_on_entry_exit_and_mode_switch);
+  RUN_TEST(test_wifi_qr_shows_only_while_it_is_up);
   RUN_TEST(test_ble_page_reflects_hid_mode);
   RUN_TEST(test_timer_page_has_big_readout_and_progress);
   RUN_TEST(test_system_page_lists_links_and_storage);
